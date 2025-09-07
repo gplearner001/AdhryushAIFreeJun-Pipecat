@@ -3,6 +3,8 @@ import { Header } from './components/Header';
 import { CallForm } from './components/CallForm';
 import { CallHistory } from './components/CallHistory';
 import { StatusIndicator } from './components/StatusIndicator';
+import { AIStatusIndicator } from './components/AIStatusIndicator';
+import { AIConversationPanel } from './components/AIConversationPanel';
 
 function App() {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
@@ -18,15 +20,22 @@ function App() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-6 flex justify-end">
           <StatusIndicator />
+          <div className="ml-4">
+            <AIStatusIndicator />
+          </div>
         </div>
         
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           <div>
             <CallForm onCallInitiated={handleCallInitiated} />
           </div>
           
           <div>
             <CallHistory refreshTrigger={refreshTrigger} />
+          </div>
+
+          <div>
+            <AIConversationPanel />
           </div>
         </div>
 

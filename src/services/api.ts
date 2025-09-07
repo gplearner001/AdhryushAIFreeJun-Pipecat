@@ -44,6 +44,22 @@ class ApiService {
   async checkHealth(): Promise<ApiResponse<{ status: string; message: string }>> {
     return this.request<{ status: string; message: string }>('/health');
   }
+
+  async generateAIResponse(conversationData: {
+    history: Array<{ role: string; content: string }>;
+    current_input: string;
+    call_id?: string;
+    context?: any;
+  }): Promise<ApiResponse<{ response: string; timestamp: string }>> {
+    return this.request<{ response: string; timestamp: string }>('/api/ai/conversation', {
+      method: 'POST',
+      body: JSON.stringify(conversationData),
+    });
+  }
+
+  async getAIStatus(): Promise<ApiResponse<{ claude_available: boolean; service: string; model: string | null }>> {
+    return this.request<{ claude_available: boolean; service: string; model: string | null }>('/api/ai/status');
+  }
 }
 
 export const apiService = new ApiService();

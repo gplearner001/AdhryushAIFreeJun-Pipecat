@@ -12,6 +12,7 @@ from datetime import datetime
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
+from claude_service import claude_service
 
 try:
     from teler import AsyncClient, CallFlow
@@ -156,23 +157,35 @@ def flow_endpoint():
     """
     Build and return call flow configuration.
     This endpoint is called by teler during call setup.
+    Now enhanced with Claude AI for dynamic flow generation.
     """
     try:
         data = request.get_json()
         logger.info(f"Flow endpoint called with data: {data}")
         
-        # Create a simple call flow
-        # In a real implementation, you might want to customize this based on the call
-        flow_config = CallFlow.stream(
-            ws_url=f"wss://{BACKEND_DOMAIN}/media-stream",
-            chunk_size=500,
-            record=True
-        ) if TELER_AVAILABLE else {
-            "type": "stream",
-            "ws_url": f"wss://{BACKEND_DOMAIN}/media-stream",
-            "chunk_size": 500,
-            "record": True
-        }
+        # Use Claude to generate dynamic call flow if available
+        if claude_service.is_available():
+            call_context = {
+                'from_number': data.get('from_number', ''),
+                'to_number': data.get('to_number', ''),
+                'purpose': data.get('purpose', 'General call'),
+                'timestamp': datetime.now().isoformat()
+            }
+            
+            # Generate flow using Claude (run async in sync context)
+            flow_config = run_async(claude_service.generate_call_flow(call_context))
+        else:
+            # Fallback to standard teler flow or basic config
+            flow_config = CallFlow.stream(
+                ws_url=f"wss://{BACKEND_DOMAIN}/media-stream",
+                chunk_size=500,
+                record=True
+            ) if TELER_AVAILABLE else {
+                "type": "stream",
+                "ws_url": f"wss://{BACKEND_DOMAIN}/media-stream",
+                "chunk_size": 500,
+                "record": True
+            }
         
         return jsonify(flow_config)
     except Exception as e:
@@ -368,6 +381,59 @@ def get_call_status(call_id):
             'success': False
         }), 500
 
+@app.route('/api/ai/conversation', methods=['POST'])
+def ai_conversation():
+    """
+    Generate AI conversation responses using Claude.
+    This endpoint can be used for real-time conversation during calls.
+    """
+    try:
+        data = request.get_json()
+        
+        if not claude_service.is_available():
+            return jsonify({
+                'error': 'Claude AI service not available',
+                'success': False
+            }), 503
+        
+        conversation_context = {
+            'history': data.get('history', []),
+            'current_input': data.get('current_input', ''),
+            'call_id': data.get('call_id', ''),
+            'context': data.get('context', {})
+        }
+        
+        # Generate response using Claude
+        response_text = run_async(claude_service.generate_conversation_response(conversation_context))
+        
+        return jsonify({
+            'success': True,
+            'data': {
+                'response': response_text,
+                'timestamp': datetime.now().isoformat()
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in AI conversation endpoint: {str(e)}")
+        return jsonify({
+            'error': 'Failed to generate AI response',
+            'message': str(e),
+            'success': False
+        }), 500
+
+@app.route('/api/ai/status', methods=['GET'])
+def ai_status():
+    """Check AI service status."""
+    return jsonify({
+        'success': True,
+        'data': {
+            'claude_available': claude_service.is_available(),
+            'service': 'Anthropic Claude',
+            'model': 'claude-3-sonnet-20240229' if claude_service.is_available() else None
+        }
+    })
+
 @app.errorhandler(404)
 def not_found(error):
     return jsonify({
@@ -389,5 +455,6 @@ if __name__ == '__main__':
     logger.info(f"Starting Teler Call Service on port {port}")
     logger.info(f"Debug mode: {debug}")
     logger.info(f"Teler library available: {TELER_AVAILABLE}")
+    logger.info(f"Claude AI available: {claude_service.is_available()}")
     
     app.run(host='0.0.0.0', port=port, debug=debug)

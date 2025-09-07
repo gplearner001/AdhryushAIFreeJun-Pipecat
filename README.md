@@ -5,6 +5,7 @@ A professional full-stack application for initiating voice calls using the offic
 ## 🚀 Features
 
 - **Professional UI**: Modern gradient design with responsive layout
+- **AI-Powered**: Integrated with Anthropic Claude for dynamic call flows and conversations
 - **Real-time Call Management**: Initiate calls and track history
 - **Backend API**: RESTful Python Flask service with official teler library integration
 - **Type Safety**: Full TypeScript implementation
@@ -70,6 +71,7 @@ VITE_API_URL=https://your-backend-url.com
 ### Backend (.env)
 ```
 TELER_API_KEY=cf771fc46a1fddb7939efa742801de98e48b0826be4d8b9976d3c7374a02368b
+ANTHROPIC_API_KEY=your_anthropic_api_key_here
 BACKEND_DOMAIN=your-backend-domain.com
 FLASK_ENV=development
 PORT=5000
@@ -84,6 +86,8 @@ The application uses the official teler Python library for voice call initiation
 - `GET /api/calls/:callId` - Get call details
 - `GET /api/calls/:callId/status` - Get real-time call status
 - `GET /health` - Health check endpoint
+- `POST /api/ai/conversation` - Generate AI responses using Claude
+- `GET /api/ai/status` - Check AI service status
 
 ## 🎨 Design Features
 
@@ -102,10 +106,12 @@ The application uses the official teler Python library for voice call initiation
 
 ## 📞 Official Teler Library Integration
 
-This application uses the official teler Python library:
+This application uses the official teler Python library enhanced with Anthropic Claude AI:
 
 1. **Direct Integration**: Uses `teler.TelerClient` for call initiation
+2. **AI-Enhanced Flows**: Claude generates dynamic call flows based on context
 2. **Real-time Status**: Supports call status monitoring
+3. **Intelligent Conversations**: AI-powered conversation responses during calls
 3. **Error Handling**: Comprehensive error handling for API failures
 4. **Production Ready**: Built for production deployment
 

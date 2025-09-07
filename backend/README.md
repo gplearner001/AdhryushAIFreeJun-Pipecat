@@ -5,6 +5,7 @@ A Python Flask backend service for initiating calls using the official teler lib
 ## Features
 
 - **Teler Integration**: Direct integration with the official teler Python library
+- **AI-Powered**: Enhanced with Anthropic Claude for dynamic call flows and conversations
 - **RESTful API**: Clean API endpoints for call management
 - **Call History**: Track and manage call history
 - **Status Monitoring**: Real-time call status updates
@@ -78,6 +79,25 @@ Get current status of a specific call.
 
 ### GET /health
 Health check endpoint.
+
+### POST /api/ai/conversation
+Generate AI conversation responses using Claude.
+
+**Request Body:**
+```json
+{
+  "history": [
+    {"role": "user", "content": "Hello"},
+    {"role": "assistant", "content": "Hi there!"}
+  ],
+  "current_input": "How can you help me?",
+  "call_id": "call_123456789",
+  "context": {}
+}
+```
+
+### GET /api/ai/status
+Check AI service status and availability.
 
 ## Deployment Recommendations
 
