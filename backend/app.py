@@ -79,8 +79,7 @@ async def create_teler_call(from_number, to_number, flow_url, status_callback_ur
                     'from_number': from_number,
                     'to_number': to_number,
                     'flow_url': flow_url,
-                    'record': record,
-                    'status_callback_url':'http://localhost:5000/webhook'
+                    'record': record
                 }
                 
                 if status_callback_url:
@@ -89,7 +88,24 @@ async def create_teler_call(from_number, to_number, flow_url, status_callback_ur
                 logger.info(f"Calling client.calls.create with params: {call_params}")
                 call = await client.calls.create(**call_params)
                 logger.info(f"Call created successfully: {call}")
-                return call
+                
+                # Convert teler response object to dictionary
+                # The teler library returns an object, not a dictionary
+                call_response = {
+                    'call_id': getattr(call, 'call_id', getattr(call, 'id', f"call_{int(datetime.now().timestamp())}")),
+                    'status': getattr(call, 'status', 'initiated'),
+                    'from_number': from_number,
+                    'to_number': to_number,
+                    'flow_url': flow_url,
+                    'record': record,
+                    'message': 'Call initiated successfully'
+                }
+                
+                # Log the actual response object for debugging
+                logger.info(f"Teler response object attributes: {dir(call)}")
+                logger.info(f"Converted response: {call_response}")
+                
+                return call_response
         else:
             # Use mock client
             logger.info("Using mock client for call creation")
@@ -103,6 +119,8 @@ async def create_teler_call(from_number, to_number, flow_url, status_callback_ur
             )
     except Exception as e:
         logger.error(f"Error creating call with teler: {str(e)}")
+        logger.error(f"Error type: {type(e)}")
+        logger.error(f"Error details: {e.__dict__ if hasattr(e, '__dict__') else 'No details'}")
         logger.info("Falling back to mock client")
         mock_client = MockTelerClient()
         return await mock_client.create_call(
@@ -225,8 +243,9 @@ def initiate_call():
         ))
 
         # Extract call information from response
-        call_id = call_response.get('call_id', f"call_{int(datetime.now().timestamp())}")
-        status = call_response.get('status', 'initiated')
+        # call_response is now guaranteed to be a dictionary
+        call_id = call_response['call_id']
+        status = call_response['status']
         
         # Create call record
         call_record = {
@@ -258,11 +277,13 @@ def initiate_call():
                 'record': record,
                 'timestamp': call_record['timestamp']
             },
-            'message': 'Call initiated successfully'
+            'message': call_response.get('message', 'Call initiated successfully')
         })
 
     except Exception as e:
         logger.error(f"Error in initiate_call: {str(e)}")
+        logger.error(f"Error type: {type(e)}")
+        logger.error(f"Traceback:", exc_info=True)
         return jsonify({
             'error': 'Internal server error',
             'message': str(e),

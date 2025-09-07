@@ -84,7 +84,7 @@ export const CallHistory: React.FC<CallHistoryProps> = ({ refreshTrigger }) => {
                   <span className="font-mono text-sm text-gray-800">{call.call_id}</span>
                 </div>
                 <span className={`px-3 py-1 rounded-full text-xs font-medium border ${getStatusColor(call.status)}`}>
-                  {call.status.toUpperCase()}
+                  {call.status ? call.status.toUpperCase() : 'UNKNOWN'}
                 </span>
               </div>
               
