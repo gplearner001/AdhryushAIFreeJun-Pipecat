@@ -177,69 +177,89 @@ def flow_endpoint():
         
         logger.info(f"Call answered - SID: {call_sid}, From: {from_number}, To: {to_number}, Status: {call_status}")
         
-        # Return TwiML-compatible response for Teler
-        # This keeps the call active and enables conversation
-        twiml_response = """<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Say voice="alice">Hello! You are now connected. Please go ahead and speak.</Say>
-    <Pause length="1"/>
-    <Record timeout="300" maxLength="1800" playBeep="false" action="/recording-complete" method="POST"/>
-</Response>"""
+        # Return a call flow configuration that enables continuous conversation
+        # Based on Teler's call flow documentation
+        flow_config = {
+            "type": "conversation",
+            "initial_message": "Hello! You are now connected. Please go ahead and speak.",
+            "conversation_mode": "bidirectional",
+            "keep_alive": True,
+            "max_duration": 1800,  # 30 minutes
+            "silence_timeout": 30,  # 30 seconds before prompting
+            "end_call_phrases": ["goodbye", "end call", "hang up", "bye"],
+            "steps": [
+                {
+                    "action": "answer_call",
+                    "auto_answer": True
+                },
+                {
+                    "action": "play_message",
+                    "text": "Hello! You are now connected. Please go ahead and speak.",
+                    "voice": "natural"
+                },
+                {
+                    "action": "enable_conversation",
+                    "mode": "continuous",
+                    "allow_interruption": True,
+                    "record": True
+                },
+                {
+                    "action": "monitor_silence",
+                    "timeout": 30,
+                    "prompt": "Are you still there? Please continue."
+                },
+                {
+                    "action": "detect_end_phrases",
+                    "phrases": ["goodbye", "end call", "hang up", "bye"],
+                    "farewell": "Thank you for calling. Goodbye!"
+                }
+            ],
+            "media_stream": {
+                "enabled": True,
+                "url": f"wss://{BACKEND_DOMAIN}/media-stream",
+                "format": "audio/wav",
+                "sample_rate": 8000
+            },
+            "recording": {
+                "enabled": True,
+                "format": "wav"
+            }
+        }
         
-        logger.info(f"Generated TwiML response for call {call_sid}")
+        logger.info(f"Generated call flow config for call {call_sid}")
         
-        # Return TwiML response with proper content type
-        return Response(twiml_response, mimetype='application/xml')
+        return jsonify(flow_config)
         
     except Exception as e:
         logger.error(f"Error in flow endpoint: {str(e)}")
-        # Return a simple fallback TwiML that keeps the call alive
-        fallback_twiml = """<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Say voice="alice">Connected. Please speak.</Say>
-    <Pause length="300"/>
-</Response>"""
-        return Response(fallback_twiml, mimetype='application/xml')
-
-@app.route('/recording-complete', methods=['POST'])
-def recording_complete():
-    """Handle recording completion and continue conversation."""
-    try:
-        data = request.form.to_dict() if request.form else request.get_json() or {}
-        logger.info(f"Recording complete: {data}")
-        
-        # Continue the conversation with another recording session
-        continue_twiml = """<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Say voice="alice">Please continue speaking.</Say>
-    <Record timeout="300" maxLength="1800" playBeep="false" action="/recording-complete" method="POST"/>
-</Response>"""
-        
-        return Response(continue_twiml, mimetype='application/xml')
-        
-    except Exception as e:
-        logger.error(f"Error in recording complete: {str(e)}")
-        end_twiml = """<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Say voice="alice">Thank you for calling. Goodbye!</Say>
-    <Hangup/>
-</Response>"""
-        return Response(end_twiml, mimetype='application/xml')
-
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    """Handle status webhooks from Teler."""
-    try:
-        data = request.form.to_dict() if request.form else request.get_json() or {}
+        # Return a simple fallback flow that keeps the call alive
+        fallback_flow = {
+            "type": "simple",
+            "steps": [
+                {
+                    "action": "answer_call"
+                },
+                {
+                    "action": "play_message",
+                    "text": "Connected. Please speak."
+                },
+                {
+                    "action": "wait",
+                    "duration": 300
+                }
+            ]
+        }
+        return jsonify(fallback_flow)
+        data = request.get_json()
         logger.info(f"--------Webhook Payload-------- {data}")
         
         # Update call history with webhook data
-        call_id = data.get('CallSid') or data.get('call_id')
+        call_id = data.get('call_id')
         if call_id:
             for call in call_history:
                 if call.get('call_id') == call_id:
                     call['webhook_data'] = data
-                    call['status'] = data.get('CallStatus', data.get('status', call['status']))
+                    call['status'] = data.get('status', call['status'])
                     call['updated_at'] = datetime.now().isoformat()
                     break
         
@@ -270,7 +290,7 @@ def initiate_call():
         from_number = data['from_number']
         to_number = data['to_number']
         flow_url = data['flow_url']
-        status_callback_url = data.get('status_callback_url', f'{BACKEND_URL}/webhook')
+        status_callback_url = data.get('status_callback_url', f'http://{BACKEND_DOMAIN}/webhook')
         record = data.get('record', True)
 
         logger.info(f"Initiating call from {from_number} to {to_number}")
