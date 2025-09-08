@@ -8,16 +8,17 @@ import os
 import json
 import logging
 import asyncio
+import asyncio
 from typing import Dict, Any
 from datetime import datetime
-from flask import Flask, request, jsonify, Response, copy_current_request_context
+from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from dotenv import load_dotenv
 from claude_service import claude_service
 
 try:
-    from teler import AsyncClient, CallFlow
+    from teler import AsyncClient
     TELER_AVAILABLE = True
 except ImportError:
     TELER_AVAILABLE = False
@@ -34,17 +35,15 @@ logger = logging.getLogger(__name__)
 # Initialize Flask app
 app = Flask(__name__)
 CORS(app)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 # Configuration
 TELER_API_KEY = os.getenv('TELER_API_KEY', 'cf771fc46a1fddb7939efa742801de98e48b0826be4d8b9976d3c7374a02368b')
 BACKEND_DOMAIN = os.getenv('BACKEND_DOMAIN', 'localhost:5000')
 BACKEND_URL = f"https://{BACKEND_DOMAIN}" if not BACKEND_DOMAIN.startswith('localhost') else f"http://{BACKEND_DOMAIN}"
-WSS_URL = f"wss://{BACKEND_DOMAIN}" if not BACKEND_DOMAIN.startswith('localhost') else f"ws://{BACKEND_DOMAIN}"
 
 # In-memory storage for call history (in production, use a database)
 call_history = []
-active_calls = {}  # Store active call sessions
 
 class MockTelerClient:
     """Mock teler client for development and testing."""
@@ -162,180 +161,95 @@ def health_check():
 @app.route('/flow', methods=['POST'])
 def flow_endpoint():
     """
-    Build and return Stream flow using Teler CallFlow.stream().
-    This creates a proper streaming call flow that maintains the connection.
+    Call flow endpoint for teler.
+    This endpoint handles the call flow and keeps the call active for conversation.
     """
     try:
-        # Get call data from request
-        data = request.get_json() or request.form.to_dict()
+        # Get form data (teler sends form data, not JSON)
+        data = request.form.to_dict() if request.form else request.get_json() or {}
         logger.info(f"Flow endpoint called with data: {data}")
         
         # Extract call information
-        call_id = data.get('call_id', data.get('CallSid', f"call_{int(datetime.now().timestamp())}"))
+        call_sid = data.get('CallSid', 'unknown')
         from_number = data.get('From', '')
         to_number = data.get('To', '')
-        account_id = data.get('account_id', data.get('AccountSid', ''))
+        call_status = data.get('CallStatus', 'unknown')
         
-        logger.info(f"Creating stream flow - ID: {call_id}, From: {from_number}, To: {to_number}")
+        logger.info(f"Call answered - SID: {call_sid}, From: {from_number}, To: {to_number}, Status: {call_status}")
         
-        # Store call information for WebSocket handling
-        active_calls[call_id] = {
-            'call_id': call_id,
-            'from_number': from_number,
-            'to_number': to_number,
-            'account_id': account_id,
-            'status': 'active',
-            'started_at': datetime.now().isoformat()
-        }
+        # Return TwiML-compatible response for Teler
+        # This keeps the call active and enables conversation
+        twiml_response = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="alice">Hello! You are now connected. Please go ahead and speak.</Say>
+    <Pause length="1"/>
+    <Record timeout="300" maxLength="1800" playBeep="false" action="/recording-complete" method="POST"/>
+</Response>"""
         
-        # Create proper streaming call flow using Teler's CallFlow.stream()
-        if TELER_AVAILABLE:
-            try:
-                stream_flow = CallFlow.stream(
-                    ws_url=f"{WSS_URL}/media-stream",
-                    chunk_size=500,
-                    record=True
-                )
-                logger.info(f"Created Teler stream flow for call {call_id}")
-                return jsonify(stream_flow)
-            except Exception as e:
-                logger.error(f"Error creating Teler stream flow: {str(e)}")
-                # Fall back to mock flow
+        logger.info(f"Generated TwiML response for call {call_sid}")
         
-        # Mock stream flow for development/testing
-        mock_stream_flow = {
-            "type": "stream",
-            "ws_url": f"{WSS_URL}/media-stream",
-            "chunk_size": 500,
-            "record": True,
-            "stream_config": {
-                "bidirectional": True,
-                "audio_format": "wav",
-                "sample_rate": 8000,
-                "channels": 1
-            },
-            "call_id": call_id
-        }
-        
-        logger.info(f"Created mock stream flow for call {call_id}")
-        return jsonify(mock_stream_flow)
+        # Return TwiML response with proper content type
+        return Response(twiml_response, mimetype='application/xml')
         
     except Exception as e:
         logger.error(f"Error in flow endpoint: {str(e)}")
-        logger.error(f"Traceback:", exc_info=True)
-        # Return a minimal fallback flow
-        fallback_flow = {
-            "type": "stream",
-            "ws_url": f"{WSS_URL}/media-stream",
-            "chunk_size": 500,
-            "record": True
-        }
-        return jsonify(fallback_flow)
+        # Return a simple fallback TwiML that keeps the call alive
+        fallback_twiml = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="alice">Connected. Please speak.</Say>
+    <Pause length="300"/>
+</Response>"""
+        return Response(fallback_twiml, mimetype='application/xml')
+
+@app.route('/recording-complete', methods=['POST'])
+def recording_complete():
+    """Handle recording completion and continue conversation."""
+    try:
+        data = request.form.to_dict() if request.form else request.get_json() or {}
+        logger.info(f"Recording complete: {data}")
+        
+        # Continue the conversation with another recording session
+        continue_twiml = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="alice">Please continue speaking.</Say>
+    <Record timeout="300" maxLength="1800" playBeep="false" action="/recording-complete" method="POST"/>
+</Response>"""
+        
+        return Response(continue_twiml, mimetype='application/xml')
+        
+    except Exception as e:
+        logger.error(f"Error in recording complete: {str(e)}")
+        end_twiml = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="alice">Thank you for calling. Goodbye!</Say>
+    <Hangup/>
+</Response>"""
+        return Response(end_twiml, mimetype='application/xml')
 
 @app.route('/webhook', methods=['POST'])
-def webhook_receiver():
-    """Handle webhooks from Teler for call status updates."""
+def webhook():
+    """Handle status webhooks from Teler."""
     try:
-        data = request.get_json()
+        data = request.form.to_dict() if request.form else request.get_json() or {}
         logger.info(f"--------Webhook Payload-------- {data}")
         
         # Update call history with webhook data
-        call_id = data.get('call_id')
+        call_id = data.get('CallSid') or data.get('call_id')
         if call_id:
-            # Update active calls
-            if call_id in active_calls:
-                active_calls[call_id].update({
-                    'status': data.get('status', 'unknown'),
-                    'updated_at': datetime.now().isoformat(),
-                    'webhook_data': data
-                })
-            
-            # Update call history
             for call in call_history:
                 if call.get('call_id') == call_id:
                     call['webhook_data'] = data
-                    call['status'] = data.get('status', call['status'])
+                    call['status'] = data.get('CallStatus', data.get('status', call['status']))
                     call['updated_at'] = datetime.now().isoformat()
                     break
         
-        return jsonify({'success': True, 'message': 'Webhook received successfully'})
+        return jsonify({'message': 'Webhook received successfully'})
     except Exception as e:
         logger.error(f"Error processing webhook: {str(e)}")
         return jsonify({
             'error': 'Failed to process webhook',
             'message': str(e)
         }), 500
-
-# WebSocket handlers for media streaming
-@socketio.on('connect')
-def handle_connect():
-    """Handle WebSocket connection for media streaming."""
-    logger.info(f"WebSocket client connected: {request.sid}")
-    emit('connected', {'status': 'Connected to media stream'})
-
-@socketio.on('disconnect')
-def handle_disconnect():
-    """Handle WebSocket disconnection."""
-    logger.info(f"WebSocket client disconnected: {request.sid}")
-
-@socketio.on('audio_data')
-def handle_audio_data(data):
-    """Handle incoming audio data from call."""
-    try:
-        logger.debug(f"Received audio data: {len(data.get('audio', ''))} bytes")
-        
-        # Process audio data here
-        # In a real implementation, you would:
-        # 1. Decode the audio
-        # 2. Process it (speech-to-text, AI response, etc.)
-        # 3. Generate response audio
-        # 4. Send back to the call
-        
-        # For now, just acknowledge receipt
-        emit('audio_processed', {'status': 'received', 'timestamp': datetime.now().isoformat()})
-        
-    except Exception as e:
-        logger.error(f"Error processing audio data: {str(e)}")
-        emit('error', {'message': 'Failed to process audio data'})
-
-@socketio.on('media_stream')
-def handle_media_stream(data):
-    """Handle media stream events."""
-    try:
-        event_type = data.get('type', 'unknown')
-        logger.info(f"Media stream event: {event_type}")
-        
-        if event_type == 'audio':
-            # Handle audio chunk
-            audio_data = data.get('data', {})
-            call_id = data.get('call_id')
-            
-            # Process audio chunk
-            logger.debug(f"Processing audio chunk for call {call_id}")
-            
-            # Echo back for testing (remove in production)
-            emit('audio_response', {
-                'type': 'audio',
-                'call_id': call_id,
-                'timestamp': datetime.now().isoformat()
-            })
-            
-        elif event_type == 'start':
-            call_id = data.get('call_id')
-            logger.info(f"Media stream started for call {call_id}")
-            emit('stream_started', {'call_id': call_id, 'status': 'active'})
-            
-        elif event_type == 'end':
-            call_id = data.get('call_id')
-            logger.info(f"Media stream ended for call {call_id}")
-            if call_id in active_calls:
-                active_calls[call_id]['status'] = 'ended'
-                active_calls[call_id]['ended_at'] = datetime.now().isoformat()
-            emit('stream_ended', {'call_id': call_id, 'status': 'ended'})
-            
-    except Exception as e:
-        logger.error(f"Error handling media stream: {str(e)}")
-        emit('error', {'message': 'Failed to handle media stream event'})
 
 @app.route('/api/calls/initiate', methods=['POST'])
 def initiate_call():
@@ -387,8 +301,8 @@ def initiate_call():
             'record': record,
             'timestamp': datetime.now().isoformat(),
             'response_data': call_response,
-            'call_type': 'stream',
-            'notes': 'Configured with streaming call flow for continuous conversation'
+            'call_type': 'conversation',
+            'notes': 'Configured for bidirectional phone conversation'
         }
 
         # Store in history
@@ -406,10 +320,10 @@ def initiate_call():
                 'flow_url': flow_url,
                 'record': record,
                 'timestamp': call_record['timestamp'],
-                'call_type': 'stream',
-                'message': 'Call configured with streaming flow for continuous conversation'
+                'call_type': 'conversation',
+                'message': 'Call configured for real phone conversation'
             },
-            'message': 'Call initiated successfully - using streaming call flow'
+            'message': 'Call initiated successfully - configured for phone conversation'
         })
 
     except Exception as e:
@@ -418,23 +332,6 @@ def initiate_call():
         logger.error(f"Traceback:", exc_info=True)
         return jsonify({
             'error': 'Internal server error',
-            'message': str(e),
-            'success': False
-        }), 500
-
-@app.route('/api/calls/active', methods=['GET'])
-def get_active_calls():
-    """Get currently active calls."""
-    try:
-        return jsonify({
-            'success': True,
-            'data': list(active_calls.values()),
-            'count': len(active_calls)
-        })
-    except Exception as e:
-        logger.error(f"Error getting active calls: {str(e)}")
-        return jsonify({
-            'error': 'Failed to retrieve active calls',
             'message': str(e),
             'success': False
         }), 500
@@ -527,9 +424,8 @@ def ai_conversation():
         data = request.get_json()
         
         if not claude_service.is_available():
-            logger.warning("Claude AI service not available - missing API key or library")
             return jsonify({
-                'error': 'Claude AI service not available - please check ANTHROPIC_API_KEY environment variable',
+                'error': 'Claude AI service not available',
                 'success': False
             }), 503
         

@@ -90,7 +90,7 @@ export const CallForm: React.FC<CallFormProps> = ({ onCallInitiated }) => {
 
         <div>
           <label htmlFor="flow_url" className="block text-sm font-medium text-gray-700 mb-2">
-            Flow URL <span className="text-green-600">(TwiML Voice App Endpoint)</span>
+            Flow URL <span className="text-green-600">(Auto-configured - TwiML endpoint)</span>
           </label>
           <input
             type="url"
@@ -99,11 +99,11 @@ export const CallForm: React.FC<CallFormProps> = ({ onCallInitiated }) => {
             value={formData.flow_url}
             onChange={handleChange}
             className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200"
-            placeholder="TwiML Voice App URL (handles call flow with proper XML response)"
+            placeholder="TwiML Flow URL (auto-configured for conversation)"
             required
           />
           <p className="text-sm text-gray-500 mt-1">
-            This endpoint returns TwiML XML to handle call flow and enable recording/conversation.
+            This TwiML endpoint handles call flow and enables continuous phone conversation.
           </p>
         </div>
 
