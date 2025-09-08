@@ -39,7 +39,7 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 
 # Configuration
 TELER_API_KEY = os.getenv('TELER_API_KEY', 'cf771fc46a1fddb7939efa742801de98e48b0826be4d8b9976d3c7374a02368b')
-BACKEND_DOMAIN = os.getenv('BACKEND_DOMAIN', 'localhost:5000')
+BACKEND_DOMAIN = os.getenv('BACKEND_DOMAIN', 'https://adhryushaifreejun-pipecat.onrender.com')
 BACKEND_URL = f"https://{BACKEND_DOMAIN}" if not BACKEND_DOMAIN.startswith('localhost') else f"http://{BACKEND_DOMAIN}"
 
 # In-memory storage for call history (in production, use a database)
@@ -170,9 +170,10 @@ def flow_endpoint():
         logger.info(f"Flow endpoint called with data: {data}")
         
         # Extract call information
-        call_sid = data.get('CallSid', 'unknown')
-        from_number = data.get('From', '')
-        to_number = data.get('To', '')
+        call_sid = data.get('CallSid', data['call_id'])
+        from_number = data.get('From', data['from_number'])
+        to_number = data.get('To', data['to_number'])
+        direction = data.get('Direction', data['direction'])
         call_status = data.get('CallStatus', 'unknown')
         
         logger.info(f"Call answered - SID: {call_sid}, From: {from_number}, To: {to_number}, Status: {call_status}")
@@ -185,7 +186,7 @@ def flow_endpoint():
             "conversation_mode": "bidirectional",
             "keep_alive": True,
             "max_duration": 1800,  # 30 minutes
-            "silence_timeout": 30,  # 30 seconds before prompting
+            "silence_timeout": 60,  # 30 seconds before prompting
             "end_call_phrases": ["goodbye", "end call", "hang up", "bye"],
             "steps": [
                 {
