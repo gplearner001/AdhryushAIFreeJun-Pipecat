@@ -39,7 +39,7 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 
 # Configuration
 TELER_API_KEY = os.getenv('TELER_API_KEY', 'cf771fc46a1fddb7939efa742801de98e48b0826be4d8b9976d3c7374a02368b')
-BACKEND_DOMAIN = os.getenv('BACKEND_DOMAIN', 'https://adhryushaifreejun-pipecat.onrender.com')
+BACKEND_DOMAIN = os.getenv('BACKEND_DOMAIN', 'localhost:5000')
 BACKEND_URL = f"https://{BACKEND_DOMAIN}" if not BACKEND_DOMAIN.startswith('localhost') else f"http://{BACKEND_DOMAIN}"
 
 # In-memory storage for call history (in production, use a database)
@@ -186,7 +186,7 @@ def flow_endpoint():
             "conversation_mode": "bidirectional",
             "keep_alive": True,
             "max_duration": 1800,  # 30 minutes
-            "silence_timeout": 60,  # 30 seconds before prompting
+            "silence_timeout": 30,  # 30 seconds before prompting
             "end_call_phrases": ["goodbye", "end call", "hang up", "bye"],
             "steps": [
                 {
@@ -252,6 +252,41 @@ def flow_endpoint():
         }
         return jsonify(fallback_flow)
         data = request.get_json()
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    """Handle webhook callbacks from teler."""
+    try:
+        # Get form data (teler sends form data, not JSON)
+        data = request.form.to_dict() if request.form else request.get_json() or {}
+        logger.info(f"Webhook received: {data}")
+        
+        # Extract call information
+        call_id = data.get('call_id') or data.get('CallSid') or data.get('id')
+        call_status = data.get('status') or data.get('CallStatus')
+        
+        if call_id:
+            # Update call history with webhook data
+            for call in call_history:
+                if call.get('call_id') == call_id:
+                    call['webhook_data'] = data
+                    if call_status:
+                        call['status'] = call_status
+                    call['updated_at'] = datetime.now().isoformat()
+                    logger.info(f"Updated call {call_id} with status: {call_status}")
+                    break
+        
+        return jsonify({
+            'message': 'Webhook received successfully',
+            'status': 'ok'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error processing webhook: {str(e)}")
+        return jsonify({
+            'error': 'Failed to process webhook',
+            'message': str(e)
+        }), 500
+
         logger.info(f"--------Webhook Payload-------- {data}")
         
         # Update call history with webhook data
