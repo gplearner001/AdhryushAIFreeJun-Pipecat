@@ -11,7 +11,7 @@ export const CallForm: React.FC<CallFormProps> = ({ onCallInitiated }) => {
   const [formData, setFormData] = useState<CallRequest>({
     from_number: '+918065193776',
     to_number: '+916360154904',
-    flow_url: 'https://webhook.site/a7163743-c704-418d-8b7d-2b5ac7889528',
+    flow_url: `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/flow`,
     status_callback_url: '',
   });
   const [isLoading, setIsLoading] = useState(false);
@@ -90,7 +90,7 @@ export const CallForm: React.FC<CallFormProps> = ({ onCallInitiated }) => {
 
         <div>
           <label htmlFor="flow_url" className="block text-sm font-medium text-gray-700 mb-2">
-            Flow URL
+            Flow URL <span className="text-green-600">(TwiML Voice App Endpoint)</span>
           </label>
           <input
             type="url"
@@ -99,9 +99,12 @@ export const CallForm: React.FC<CallFormProps> = ({ onCallInitiated }) => {
             value={formData.flow_url}
             onChange={handleChange}
             className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200"
-            placeholder="https://webhook.site/your-webhook-url"
+            placeholder="TwiML Voice App URL (handles call flow with proper XML response)"
             required
           />
+          <p className="text-sm text-gray-500 mt-1">
+            This endpoint returns TwiML XML to handle call flow and enable recording/conversation.
+          </p>
         </div>
 
         <div>

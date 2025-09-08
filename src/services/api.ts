@@ -37,6 +37,10 @@ class ApiService {
     return this.request<CallHistoryItem[]>('/api/calls/history');
   }
 
+  async getActiveCalls(): Promise<ApiResponse<any[]>> {
+    return this.request<any[]>('/api/calls/active');
+  }
+
   async getCallDetails(callId: string): Promise<ApiResponse<CallResponse>> {
     return this.request<CallResponse>(`/api/calls/${callId}`);
   }

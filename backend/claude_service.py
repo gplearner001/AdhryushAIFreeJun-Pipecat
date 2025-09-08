@@ -40,6 +40,7 @@ class ClaudeService:
     
     def is_available(self) -> bool:
         """Check if Claude service is available."""
+        return self.client is not None and ANTHROPIC_AVAILABLE and self.api_key is not None
     
     async def generate_call_flow(self, call_context: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -52,13 +53,13 @@ class ClaudeService:
             Dictionary containing the generated call flow
         """
         if not self.is_available():
-            return self._get_default_flow()
+            return self._get_conversation_flow()
         
         try:
             prompt = self._build_flow_generation_prompt(call_context)
             
             response = self.client.messages.create(
-                model="claude-3-sonnet-20240229",
+                model="claude-3-5-sonnet-20241022",
                 max_tokens=1000,
                 temperature=0.3,
                 messages=[
@@ -77,7 +78,7 @@ class ClaudeService:
             
         except Exception as e:
             logger.error(f"Error generating call flow with Claude: {str(e)}")
-            return self._get_default_flow()
+            return self._get_conversation_flow()
     
     async def generate_conversation_response(self, conversation_context: Dict[str, Any]) -> str:
         """
@@ -96,7 +97,7 @@ class ClaudeService:
             prompt = self._build_conversation_prompt(conversation_context)
             
             response = self.client.messages.create(
-                model="claude-3-sonnet-20240229",
+                model="claude-3-5-sonnet-20241022",
                 max_tokens=500,
                 temperature=0.7,
                 messages=[
@@ -116,20 +117,30 @@ class ClaudeService:
     def _build_flow_generation_prompt(self, call_context: Dict[str, Any]) -> str:
         """Build prompt for call flow generation."""
         return f"""
-        Generate a call flow configuration for a voice call with the following context:
+        Generate a call flow configuration for a CONVERSATIONAL voice call with the following context:
         
         From: {call_context.get('from_number', 'Unknown')}
         To: {call_context.get('to_number', 'Unknown')}
         Purpose: {call_context.get('purpose', 'General call')}
         
+        IMPORTANT: This call flow must enable REAL PHONE CONVERSATION between two people.
+        The call should NOT end automatically after answering. It should:
+        
+        1. Answer the call automatically
+        2. Play a brief greeting (max 5 seconds)
+        3. Enable bidirectional conversation mode
+        4. Keep the call active for actual human-to-human conversation
+        5. Only end when explicitly requested or after long silence
+        
         Please provide a JSON configuration that includes:
-        1. Initial greeting message
-        2. Call flow steps
-        3. Response handling
-        4. Recording preferences
+        1. Call answering and greeting
+        2. Continuous conversation mode (not just listen/respond cycles)
+        3. Proper call termination handling
+        4. Recording and audio quality settings
+        5. Silence detection and handling
         
         Format the response as a valid JSON object that can be used for call flow configuration.
-        Focus on creating a professional and engaging call experience.
+        Focus on enabling REAL PHONE CONVERSATION, not automated responses.
         """
     
     def _build_conversation_prompt(self, conversation_context: Dict[str, Any]) -> str:
@@ -161,19 +172,19 @@ class ClaudeService:
             # Look for JSON in the response
             json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
             if json_match:
-                return json.loads(json_match.group())
+                parsed_flow = json.loads(json_match.group())
+                # Ensure the flow supports conversation
+                if 'conversation_mode' not in parsed_flow:
+                    parsed_flow['conversation_mode'] = 'bidirectional'
+                if 'keep_alive' not in parsed_flow:
+                    parsed_flow['keep_alive'] = True
+                return parsed_flow
             else:
-                # If no JSON found, create a basic flow with the response as greeting
-                return {
-                    "type": "stream",
-                    "greeting": response_text[:200],  # First 200 chars as greeting
-                    "ws_url": f"wss://localhost:5000/media-stream",
-                    "chunk_size": 500,
-                    "record": True
-                }
+                # If no JSON found, use conversation flow
+                return self._get_conversation_flow()
         except Exception as e:
             logger.error(f"Error parsing Claude response: {str(e)}")
-            return self._get_default_flow()
+            return self._get_conversation_flow()
     
     def _get_default_flow(self) -> Dict[str, Any]:
         """Get default call flow configuration."""
@@ -197,6 +208,55 @@ class ClaudeService:
                     "type": "dynamic"
                 }
             ]
+        }
+    
+    def _get_conversation_flow(self) -> Dict[str, Any]:
+        """Get conversation-focused call flow configuration."""
+        return {
+            "type": "conversation",
+            "initial_message": "Hello! You're now connected. Please go ahead and speak.",
+            "conversation_mode": "bidirectional",
+            "keep_alive": True,
+            "max_duration": 1800,  # 30 minutes max
+            "silence_timeout": 10,  # 10 seconds of silence before prompting
+            "end_call_phrases": ["goodbye", "end call", "hang up", "bye bye"],
+            "steps": [
+                {
+                    "action": "answer_call",
+                    "auto_answer": True
+                },
+                {
+                    "action": "play_greeting",
+                    "text": "Hello! You're now connected. Please go ahead and speak.",
+                    "voice": "natural"
+                },
+                {
+                    "action": "start_conversation",
+                    "mode": "continuous",
+                    "enable_interruption": True,
+                    "record_conversation": True
+                },
+                {
+                    "action": "monitor_silence",
+                    "timeout": 10,
+                    "prompt_text": "Are you still there? Please continue speaking."
+                },
+                {
+                    "action": "end_call_detection",
+                    "phrases": ["goodbye", "end call", "hang up", "bye bye"],
+                    "farewell_message": "Thank you for calling. Have a great day!"
+                }
+            ],
+            "recording": {
+                "enabled": True,
+                "format": "wav",
+                "quality": "high"
+            },
+            "audio_settings": {
+                "echo_cancellation": True,
+                "noise_reduction": True,
+                "auto_gain_control": True
+            }
         }
 
 # Global instance

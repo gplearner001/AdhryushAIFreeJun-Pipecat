@@ -7,8 +7,11 @@ A Python Flask backend service for initiating calls using the official teler lib
 - **Teler Integration**: Direct integration with the official teler Python library
 - **AI-Powered**: Enhanced with Anthropic Claude for dynamic call flows and conversations
 - **RESTful API**: Clean API endpoints for call management
+- **Media Streaming**: WebSocket support for real-time audio streaming
 - **Call History**: Track and manage call history
+- **Active Call Monitoring**: Real-time tracking of active calls
 - **Status Monitoring**: Real-time call status updates
+- **Webhook Handling**: Comprehensive webhook processing for call events
 - **Error Handling**: Comprehensive error handling and logging
 
 ## Setup
@@ -47,7 +50,7 @@ Initiate a new call using the teler library.
 {
   "from_number": "+918065193776",
   "to_number": "+916360154904",
-  "flow_url": "https://webhook.site/a7163743-c704-418d-8b7d-2b5ac7889528",
+  "flow_url": "https://your-backend-domain.com/flow",
   "status_callback_url": ""
 }
 ```
@@ -61,12 +64,15 @@ Initiate a new call using the teler library.
     "status": "initiated",
     "from_number": "+918065193776",
     "to_number": "+916360154904",
-    "flow_url": "https://webhook.site/...",
+    "flow_url": "https://your-backend-domain.com/flow",
     "timestamp": "2025-01-27T10:30:00"
   },
   "message": "Call initiated successfully"
 }
 ```
+
+### GET /api/calls/active
+Get currently active calls.
 
 ### GET /api/calls/history
 Get call history.
@@ -76,6 +82,18 @@ Get specific call details.
 
 ### GET /api/calls/:callId/status
 Get current status of a specific call.
+
+### POST /flow
+Main call flow endpoint that handles call routing and maintains continuous conversation.
+
+### POST /webhook
+Webhook endpoint for receiving call status updates from Teler.
+
+### POST /webhook/hangup
+Webhook endpoint for handling call hangup events.
+
+### WebSocket /media-stream
+WebSocket endpoint for real-time media streaming during calls.
 
 ### GET /health
 Health check endpoint.
@@ -98,6 +116,54 @@ Generate AI conversation responses using Claude.
 
 ### GET /api/ai/status
 Check AI service status and availability.
+
+## Call Flow Implementation
+
+The backend implements proper Teler call flow handling:
+
+1. **Call Initiation**: Uses Teler AsyncClient to create calls
+2. **Flow Endpoint**: Returns JSON flow configuration for continuous conversation
+3. **Media Streaming**: WebSocket support for real-time audio processing
+4. **Webhook Processing**: Handles all call status updates and events
+5. **Active Call Tracking**: Monitors currently active calls in real-time
+
+### Flow Configuration
+
+The `/flow` endpoint returns a Teler-compatible flow configuration:
+
+```json
+{
+  "version": "1.0",
+  "flow": [
+    {
+      "action": "say",
+      "text": "Hello! You are now connected. Please go ahead and speak.",
+      "voice": "en-US-Standard-A",
+      "language": "en-US"
+    },
+    {
+      "action": "stream",
+      "url": "wss://your-domain.com/media-stream",
+      "track": "both",
+      "parameters": {
+        "callSid": "call_id",
+        "from": "from_number",
+        "to": "to_number"
+      }
+    },
+    {
+      "action": "pause",
+      "length": 1800
+    }
+  ]
+}
+```
+
+This configuration:
+- Plays a greeting when the call is answered
+- Establishes a WebSocket connection for media streaming
+- Keeps the call active for up to 30 minutes
+- Enables bidirectional conversation
 
 ## Deployment Recommendations
 
