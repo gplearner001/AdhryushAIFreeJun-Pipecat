@@ -39,7 +39,7 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 
 # Configuration
 TELER_API_KEY = os.getenv('TELER_API_KEY', 'cf771fc46a1fddb7939efa742801de98e48b0826be4d8b9976d3c7374a02368b')
-BACKEND_DOMAIN = os.getenv('BACKEND_DOMAIN', 'localhost:5000')
+BACKEND_DOMAIN = os.getenv('BACKEND_DOMAIN', 'https://adhryushaifreejun-pipecat.onrender.com')
 BACKEND_URL = f"https://{BACKEND_DOMAIN}" if not BACKEND_DOMAIN.startswith('localhost') else f"http://{BACKEND_DOMAIN}"
 
 # In-memory storage for call history (in production, use a database)
