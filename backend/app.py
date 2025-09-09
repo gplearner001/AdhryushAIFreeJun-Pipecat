@@ -44,7 +44,6 @@ BACKEND_URL = f"https://{BACKEND_DOMAIN}" if not BACKEND_DOMAIN.startswith('loca
 
 # In-memory storage for call history (in production, use a database)
 call_history = []
-
 class MockTelerClient:
     """Mock teler client for development and testing."""
     
@@ -229,11 +228,13 @@ def flow_endpoint():
         
         logger.info(f"Generated call flow config for call {call_sid}")
         
-        return jsonify(flow_config)
-        
-    except Exception as e:
-        logger.error(f"Error in flow endpoint: {str(e)}")
-        # Return a simple fallback flow that keeps the call alive
+        # Return the stream flow format that Teler expects
+        flow_config = {
+            "action": "stream",
+            "ws_url": f"wss://{BACKEND_DOMAIN}/media-stream",
+            "chunk_size": 500,
+            "sample_rate": "8k"
+        }
         fallback_flow = {
             "type": "simple",
             "steps": [
@@ -250,7 +251,9 @@ def flow_endpoint():
                 }
             ]
         }
-        return jsonify(fallback_flow)
+        return jsonify(flow_config)
+    
+    except Exception as e:
         data = request.get_json()
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -522,6 +525,30 @@ def ai_status():
             'model': 'claude-3-sonnet-20240229' if claude_service.is_available() else None
         }
     })
+
+@socketio.on('connect')
+def handle_connect():
+    """Handle WebSocket connection for media streaming."""
+    logger.info(f"WebSocket client connected: {request.sid}")
+    emit('connected', {'message': 'Connected to media stream'})
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    """Handle WebSocket disconnection."""
+    logger.info(f"WebSocket client disconnected: {request.sid}")
+
+@socketio.on('audio_data')
+def handle_audio_data(data):
+    """Handle incoming audio data from the call."""
+    logger.info(f"Received audio data: {len(data.get('audio', ''))} bytes")
+    # Here you can process the audio data, send it to AI services, etc.
+    # For now, just echo it back or handle as needed
+    emit('audio_response', {'message': 'Audio received'})
+
+@app.route('/media-stream')
+def media_stream():
+    """WebSocket endpoint for media streaming."""
+    return "WebSocket endpoint for media streaming. Use wss:// protocol to connect."
 
 @app.errorhandler(404)
 def not_found(error):
