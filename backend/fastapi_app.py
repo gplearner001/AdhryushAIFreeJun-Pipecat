@@ -397,26 +397,6 @@ async def get_websocket_streams():
         'count': len(streams)
     }
 
-@app.get("/api/websocket/stats/{connection_id}")
-async def get_connection_stats(connection_id: str):
-    """Get statistics for a specific WebSocket connection."""
-    stats = websocket_handler.get_connection_stats(connection_id)
-    if not stats:
-        raise HTTPException(status_code=404, detail="Connection not found")
-    return {
-        'success': True,
-        'data': stats
-    }
-
-@app.post("/api/websocket/toggle-processing")
-async def toggle_audio_processing(enabled: bool = Body(...)):
-    """Enable or disable audio processing to reduce load."""
-    websocket_handler.toggle_audio_processing(enabled)
-    return {
-        'success': True,
-        'message': f"Audio processing {'enabled' if enabled else 'disabled'}"
-    }
-
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv('PORT', 8000))

@@ -4,6 +4,5 @@ uvicorn[standard]==0.24.0
 websockets==12.0
 python-dotenv==1.0.0
 requests==2.31.0
-speechrecognition==3.10.0
-pyaudio==0.2.11
-pydub==0.25.1
+anthropic==0.7.8
+pydantic==2.5.0

@@ -4,7 +4,6 @@ import { CallForm } from './components/CallForm';
 import { CallHistory } from './components/CallHistory';
 import { StatusIndicator } from './components/StatusIndicator';
 import { AIStatusIndicator } from './components/AIStatusIndicator';
-import { AudioStatusIndicator } from './components/AudioStatusIndicator';
 import { AIConversationPanel } from './components/AIConversationPanel';
 
 function App() {
@@ -23,9 +22,6 @@ function App() {
           <StatusIndicator />
           <div className="ml-4">
             <AIStatusIndicator />
-          </div>
-          <div className="ml-4">
-            <AudioStatusIndicator />
           </div>
         </div>
         
