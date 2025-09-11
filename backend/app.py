@@ -238,12 +238,12 @@ def flow_endpoint():
         logger.info(f"Generated call flow config for call {call_sid}")
         
         # Return the stream flow format that Teler expects
-        flow_config = CallFlow.stream(
-            action="stream",
-            ws_url=f"wss://{BACKEND_DOMAIN}/media-stream",
-            chunk_size=400,
-        )
-            
+        flow_config = {
+            "action": "stream",
+            "ws_url": f"wss://{BACKEND_DOMAIN}/media-stream",
+            "chunk_size": 500,
+            "sample_rate": "8k"
+        }
         return jsonify(flow_config)
     
     except Exception as e:
