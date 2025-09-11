@@ -213,7 +213,7 @@ def health_check():
     })
 
 @app.route('/flow', methods=['POST'])
-async def  stream_flow(payload: CallFlowRequest):
+def flow_endpoint():
     """
     Call flow endpoint for teler.
     This endpoint handles the call flow and keeps the call active for conversation.
