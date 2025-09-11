@@ -146,7 +146,8 @@ async def health_check():
         'timestamp': datetime.now().isoformat(),
         'teler_available': TELER_AVAILABLE,
         'claude_available': claude_service.is_available(),
-        'audio_processing_available': audio_processor.is_available()
+        'audio_processor_available': audio_processor.is_processor_available(),
+        'audio_processor_status': audio_processor.get_status()
     }
 
 @app.post("/flow", status_code=status.HTTP_200_OK)
@@ -399,28 +400,14 @@ async def get_websocket_streams():
         'count': len(streams)
     }
 
-@app.get("/api/websocket/conversation/{connection_id}")
-async def get_conversation_history(connection_id: str):
-    """Get conversation history for a specific WebSocket connection."""
-    history = websocket_handler.get_conversation_history(connection_id)
-    return {
-        'success': True,
-        'data': history,
-        'count': len(history)
-    }
-
 @app.get("/api/audio/status")
 async def get_audio_status():
-    """Get audio processing service status."""
+    """Get audio processor status and capabilities."""
     return {
         'success': True,
-        'data': {
-            'stt_available': audio_processor.is_available(),
-            'tts_available': audio_processor.is_available(),
-            'service': 'SpeechRecognition + pyttsx3',
-            'supported_formats': ['audio/l16']
-        }
+        'data': audio_processor.get_status()
     }
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv('PORT', 8000))
@@ -428,7 +415,8 @@ if __name__ == "__main__":
     logger.info(f"Starting Teler FastAPI Service on port {port}")
     logger.info(f"Teler library available: {TELER_AVAILABLE}")
     logger.info(f"Claude AI available: {claude_service.is_available()}")
-    logger.info(f"Audio processing available: {audio_processor.is_available()}")
+    logger.info(f"Audio processor available: {audio_processor.is_processor_available()}")
+    logger.info(f"Audio processor status: {audio_processor.get_status()}")
     
     uvicorn.run(
         "fastapi_app:app",
