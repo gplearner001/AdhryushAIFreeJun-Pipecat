@@ -1,13 +1,14 @@
 # Teler Backend Service
 
-A Python Flask backend service for initiating calls using the official teler library.
+A Python FastAPI backend service for initiating calls using the official teler library with WebSocket streaming support.
 
 ## Features
 
 - **Teler Integration**: Direct integration with the official teler Python library
+- **WebSocket Streaming**: Full bidirectional audio streaming support as per Teler documentation
 - **AI-Powered**: Enhanced with Anthropic Claude for dynamic call flows and conversations
 - **RESTful API**: Clean API endpoints for call management
-- **Media Streaming**: WebSocket support for real-time audio streaming
+- **Real-time Audio**: WebSocket support for real-time audio streaming with proper message handling
 - **Call History**: Track and manage call history
 - **Active Call Monitoring**: Real-time tracking of active calls
 - **Status Monitoring**: Real-time call status updates
@@ -35,10 +36,33 @@ Update the `.env` file with your actual Teler API credentials.
 ### 3. Start the Server
 
 ```bash
-python app.py
+python fastapi_app.py
 ```
 
-The server will start on `http://localhost:5000`
+The server will start on `http://localhost:8000`
+
+## WebSocket Streaming Implementation
+
+The backend now implements proper Teler WebSocket streaming as per the official documentation:
+
+### Incoming Messages (Teler -> App)
+
+1. **start**: Contains stream metadata (first message)
+2. **audio**: Contains base64-encoded audio chunks
+
+### Outgoing Messages (App -> Teler)
+
+1. **audio**: Send audio responses with chunk_id
+2. **interrupt**: Stop specific chunk playback
+3. **clear**: Clear entire audio buffer
+
+### WebSocket Endpoint
+
+- **WebSocket /media-stream**: Main streaming endpoint for Teler integration
+- Handles bidirectional audio streaming
+- Processes incoming audio chunks
+- Can send audio responses back to Teler
+- Supports interrupt and clear commands
 
 ## API Endpoints
 
@@ -74,6 +98,27 @@ Initiate a new call using the teler library.
 ### GET /api/calls/active
 Get currently active calls.
 
+**Response:**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "call_id": "call_123456789",
+      "stream_id": "stream_abc123",
+      "connection_id": "conn_xyz789",
+      "from": "+918065193776",
+      "to": "+916360154904",
+      "status": "active",
+      "started_at": "2025-01-27T10:30:00",
+      "encoding": "audio/l16",
+      "sample_rate": 8000
+    }
+  ],
+  "count": 1
+}
+```
+
 ### GET /api/calls/history
 Get call history.
 
@@ -86,11 +131,18 @@ Get current status of a specific call.
 ### POST /flow
 Main call flow endpoint that handles call routing and maintains continuous conversation.
 
+**Response:**
+```json
+{
+  "action": "stream",
+  "ws_url": "wss://your-domain.com/media-stream",
+  "chunk_size": 500,
+  "record": true
+}
+```
+
 ### POST /webhook
 Webhook endpoint for receiving call status updates from Teler.
-
-### POST /webhook/hangup
-Webhook endpoint for handling call hangup events.
 
 ### WebSocket /media-stream
 WebSocket endpoint for real-time media streaming during calls.
@@ -119,51 +171,63 @@ Check AI service status and availability.
 
 ## Call Flow Implementation
 
-The backend implements proper Teler call flow handling:
+The backend implements proper Teler call flow handling with WebSocket streaming:
 
 1. **Call Initiation**: Uses Teler AsyncClient to create calls
-2. **Flow Endpoint**: Returns JSON flow configuration for continuous conversation
-3. **Media Streaming**: WebSocket support for real-time audio processing
+2. **Flow Endpoint**: Returns stream flow configuration for WebSocket connection
+3. **WebSocket Streaming**: Full bidirectional audio streaming with proper message handling
 4. **Webhook Processing**: Handles all call status updates and events
 5. **Active Call Tracking**: Monitors currently active calls in real-time
 
-### Flow Configuration
+### WebSocket Message Handling
 
-The `/flow` endpoint returns a Teler-compatible flow configuration:
+The WebSocket handler processes messages according to Teler documentation:
 
-```json
+```python
+# Incoming from Teler
 {
-  "version": "1.0",
-  "flow": [
-    {
-      "action": "say",
-      "text": "Hello! You are now connected. Please go ahead and speak.",
-      "voice": "en-US-Standard-A",
-      "language": "en-US"
-    },
-    {
-      "action": "stream",
-      "url": "wss://your-domain.com/media-stream",
-      "track": "both",
-      "parameters": {
-        "callSid": "call_id",
-        "from": "from_number",
-        "to": "to_number"
-      }
-    },
-    {
-      "action": "pause",
-      "length": 1800
-    }
-  ]
+  "type": "start",
+  "account_id": "uuid",
+  "call_id": "uuid",
+  "stream_id": "uuid",
+  "data": {
+    "encoding": "audio/l16",
+    "sample_rate": 8000,
+    "channels": 1
+  }
+}
+
+{
+  "type": "audio",
+  "stream_id": "uuid",
+  "message_id": 123,
+  "data": {
+    "audio_b64": "base64_encoded_audio"
+  }
+}
+
+# Outgoing to Teler
+{
+  "type": "audio",
+  "audio_b64": "base64_encoded_audio",
+  "chunk_id": 123
+}
+
+{
+  "type": "interrupt",
+  "chunk_id": 123
+}
+
+{
+  "type": "clear"
 }
 ```
 
-This configuration:
-- Plays a greeting when the call is answered
-- Establishes a WebSocket connection for media streaming
-- Keeps the call active for up to 30 minutes
-- Enables bidirectional conversation
+### Additional WebSocket Control Endpoints
+
+- **POST /api/websocket/interrupt/{connection_id}**: Send interrupt message
+- **POST /api/websocket/clear/{connection_id}**: Send clear message  
+- **GET /api/websocket/streams**: Get active WebSocket stream information
 
 ## Deployment Recommendations
 

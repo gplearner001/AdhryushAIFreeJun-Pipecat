@@ -30,4 +30,4 @@ HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
     CMD python -c "import requests; requests.get('http://localhost:5000/health')"
 
 # Start application
-CMD ["python", "app.py"]
+CMD ["python", "fastapi_app.py"]
