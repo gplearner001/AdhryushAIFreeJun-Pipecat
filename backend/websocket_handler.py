@@ -21,7 +21,7 @@ class TelerWebSocketHandler:
     def __init__(self):
         self.active_connections: Dict[str, WebSocket] = {}
         self.stream_metadata: Dict[str, Dict[str, Any]] = {}
-        self.chunk_counter = 1
+        self.chunk_counter = 400
         
     async def connect(self, websocket: WebSocket, stream_id: str = None):
         """Accept WebSocket connection and store it"""
@@ -96,6 +96,7 @@ class TelerWebSocketHandler:
         
         # Process the audio with STT
         response_audio = await self._process_audio_chunk(audio_b64, connection_id)
+        logger.info("response_audio", response_audio)
         
         # Send response audio back to Teler if we have any
         if response_audio:
@@ -115,7 +116,7 @@ class TelerWebSocketHandler:
             "chunk_id": self.chunk_counter
         }
         
-        self.chunk_counter += 1
+        self.chunk_counter *= 20
         
         # For now, we'll skip sending audio greetings since TTS is not implemented
         logger.info(f"Connection established for {connection_id} - ready to receive audio")
@@ -187,7 +188,7 @@ class TelerWebSocketHandler:
             "chunk_id": self.chunk_counter
         }
         
-        self.chunk_counter += 1
+        self.chunk_counter *= 20
         
         try:
             await websocket.send_text(json.dumps(response_message))
