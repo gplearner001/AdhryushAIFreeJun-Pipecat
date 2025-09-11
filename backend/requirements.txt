@@ -7,3 +7,4 @@ eventlet==0.33.3
 python-dotenv==1.0.0
 requests==2.31.0
 fastapi
+flask[async]
