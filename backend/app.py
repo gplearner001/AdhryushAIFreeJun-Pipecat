@@ -17,6 +17,15 @@ from flask_socketio import SocketIO, emit
 from dotenv import load_dotenv
 from claude_service import claude_service
 
+# Teler Code
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Body, status, HTTPException
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, HttpUrl
+from typing import Annotated
+
+from teler.streams import StreamConnector, StreamOp, StreamType
+from teler import AsyncClient, CallFlow
+
 try:
     from teler import AsyncClient
     TELER_AVAILABLE = True
@@ -41,6 +50,52 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 TELER_API_KEY = os.getenv('TELER_API_KEY', 'cf771fc46a1fddb7939efa742801de98e48b0826be4d8b9976d3c7374a02368b')
 BACKEND_DOMAIN = os.getenv('BACKEND_DOMAIN', 'https://adhryushaifreejun-pipecat.onrender.com')
 BACKEND_URL = f"https://{BACKEND_DOMAIN}" if not BACKEND_DOMAIN.startswith('localhost') else f"http://{BACKEND_DOMAIN}"
+
+
+#Teler Code
+class CallFlowRequest(BaseModel):
+    call_id: str
+    account_id: str
+    from_number: str
+    to_number: str
+
+async def call_stream_handler(message: str):
+    msg = json.loads(message)
+    if msg["type"] == "audio":
+        payload = json.dumps({"user_audio_chunk": msg["data"]["audio_b64"]})
+        return (payload, StreamOp.RELAY)
+    return ({}, StreamOp.PASS)
+
+def remote_stream_handler():
+    chunk_id = 1
+
+    async def handler(message: str):
+        nonlocal chunk_id
+        msg = json.loads(message)
+        if msg["type"] == "audio":
+            payload = json.dumps(
+                {
+                    "type": "audio",
+                    "audio_b64": msg["audio_event"]["audio_base_64"],
+                    "chunk_id": chunk_id,
+                }
+            )
+            chunk_id += 1
+            return (payload, StreamOp.RELAY)
+        elif msg["type"] == "interruption":
+            payload = json.dumps({"type": "clear"})
+            return (payload, StreamOp.RELAY)
+        return ({}, StreamOp.PASS)
+
+    return handler
+
+connector = StreamConnector(
+    stream_type=StreamType.BIDIRECTIONAL,
+    remote_url=f"wss://{BACKEND_DOMAIN}/media-stream",
+    call_stream_handler=call_stream_handler,
+    remote_stream_handler=remote_stream_handler(),
+)
+
 
 # In-memory storage for call history (in production, use a database)
 call_history = []
@@ -545,10 +600,11 @@ def handle_audio_data(data):
     # For now, just echo it back or handle as needed
     emit('audio_response', {'message': 'Audio received'})
 
-@app.route('/media-stream')
-def media_stream():
-    """WebSocket endpoint for media streaming."""
-    return "WebSocket endpoint for media streaming. Use wss:// protocol to connect."
+@app.route("/media-stream")
+async def handle_media_stream(websocket: WebSocket):
+    await websocket.accept()
+    logger.info("WebSocket connected.")
+    await connector.bridge_stream(websocket)
 
 @app.errorhandler(404)
 def not_found(error):
