@@ -92,109 +92,14 @@ class TelerWebSocketHandler:
             logger.warning("Received audio message without audio data")
             return
         
-        logger.debug(f"Received audio chunk {message_id} for stream {stream_id}")
+        logger.info(f"Received audio chunk {message_id} for stream {stream_id} ({len(audio_b64)} chars)")
         
-        # Convert audio to text using STT
-        stream_metadata = self.stream_metadata.get(connection_id, {})
-        encoding = stream_metadata.get("encoding", "audio/l16")
-        sample_rate = stream_metadata.get("sample_rate", 8000)
+        # Process the audio with STT
+        response_audio = await self._process_audio_chunk(audio_b64, connection_id)
         
-        transcribed_text = await audio_processor.base64_to_text(audio_b64, encoding, sample_rate)
-        
-        if transcribed_text:
-            logger.info(f"User said: '{transcribed_text}'")
-            
-            # Generate AI response using Claude
-            response_text = await self._generate_ai_response(transcribed_text, connection_id)
-            
-            if response_text:
-                # Convert AI response to audio using TTS
-                response_audio_b64 = await audio_processor.text_to_base64(response_text, encoding, sample_rate)
-                
-                if response_audio_b64:
-                    # Send audio response back to Teler
-                    await self._send_audio_response(websocket, response_audio_b64)
-                else:
-                    logger.warning("Failed to convert AI response to audio")
-            else:
-                logger.warning("No AI response generated")
-        else:
-            logger.debug("No speech detected in audio chunk")
-    
-    async def _generate_ai_response(self, user_text: str, connection_id: str) -> Optional[str]:
-        """
-        Generate AI response using Claude based on user speech
-        
-        Args:
-            user_text: Transcribed user speech
-            connection_id: WebSocket connection ID
-            
-        Returns:
-            AI generated response text
-        """
-        try:
-            # Get conversation history for this connection
-            if not hasattr(self, 'conversation_history'):
-                self.conversation_history = {}
-            
-            if connection_id not in self.conversation_history:
-                self.conversation_history[connection_id] = []
-            
-            # Add user message to history
-            self.conversation_history[connection_id].append({
-                "role": "user",
-                "content": user_text
-            })
-            
-            # Generate AI response
-            conversation_context = {
-                "history": self.conversation_history[connection_id],
-                "current_input": user_text,
-                "call_id": self.stream_metadata.get(connection_id, {}).get("call_id"),
-                "context": {
-                    "source": "voice_call",
-                    "connection_id": connection_id,
-                    "stream_metadata": self.stream_metadata.get(connection_id, {})
-                }
-            }
-            
-            if claude_service.is_available():
-                response_text = await claude_service.generate_conversation_response(conversation_context)
-            else:
-                # Fallback response when Claude is not available
-                response_text = self._get_fallback_response(user_text)
-            
-            # Add AI response to history
-            self.conversation_history[connection_id].append({
-                "role": "assistant",
-                "content": response_text
-            })
-            
-            # Limit conversation history to last 20 messages
-            if len(self.conversation_history[connection_id]) > 20:
-                self.conversation_history[connection_id] = self.conversation_history[connection_id][-20:]
-            
-            logger.info(f"AI response generated: '{response_text}'")
-            return response_text
-            
-        except Exception as e:
-            logger.error(f"Error generating AI response: {e}")
-            return "I apologize, but I'm having trouble processing your request right now."
-    
-    def _get_fallback_response(self, user_text: str) -> str:
-        """Generate fallback response when AI is not available"""
-        user_text_lower = user_text.lower()
-        
-        if any(greeting in user_text_lower for greeting in ["hello", "hi", "hey"]):
-            return "Hello! How can I help you today?"
-        elif any(question in user_text_lower for question in ["how are you", "how's it going"]):
-            return "I'm doing well, thank you for asking! How can I assist you?"
-        elif any(thanks in user_text_lower for thanks in ["thank you", "thanks"]):
-            return "You're welcome! Is there anything else I can help you with?"
-        elif any(goodbye in user_text_lower for goodbye in ["goodbye", "bye", "see you"]):
-            return "Goodbye! Have a great day!"
-        else:
-            return f"I heard you say: '{user_text}'. How can I help you with that?"
+        # Send response audio back to Teler if we have any
+        if response_audio:
+            await self._send_audio_response(websocket, response_audio)
     
     async def _send_initial_greeting(self, connection_id: str):
         """Send initial greeting audio to the caller"""
@@ -202,60 +107,77 @@ class TelerWebSocketHandler:
         if not websocket:
             return
         
-        # Generate greeting using TTS
-        greeting_text = "Hello! Thank you for calling. I'm your AI assistant. How can I help you today?"
+        # This would typically be generated by TTS or pre-recorded
+        # For now, we'll simulate with a placeholder
+        greeting_message = {
+            "type": "audio",
+            "audio_b64": "UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=",  # Empty WAV header
+            "chunk_id": self.chunk_counter
+        }
         
-        stream_metadata = self.stream_metadata.get(connection_id, {})
-        encoding = stream_metadata.get("encoding", "audio/l16")
-        sample_rate = stream_metadata.get("sample_rate", 8000)
+        self.chunk_counter += 1
         
-        greeting_audio_b64 = await audio_processor.text_to_base64(greeting_text, encoding, sample_rate)
-        
-        if greeting_audio_b64:
-            greeting_message = {
-                "type": "audio",
-                "audio_b64": greeting_audio_b64,
-                "chunk_id": self.chunk_counter
-            }
-            
-            self.chunk_counter += 1
-            
-            try:
-                await websocket.send_text(json.dumps(greeting_message))
-                logger.info(f"Sent TTS greeting to connection {connection_id}")
-            except Exception as e:
-                logger.error(f"Failed to send greeting: {e}")
-        else:
-            logger.warning("Failed to generate greeting audio, sending placeholder")
-            # Fallback to empty audio if TTS fails
-            greeting_message = {
-                "type": "audio",
-                "audio_b64": "UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=",
-                "chunk_id": self.chunk_counter
-            }
-            
-            self.chunk_counter += 1
-            
-            try:
-                await websocket.send_text(json.dumps(greeting_message))
-                logger.info(f"Sent placeholder greeting to connection {connection_id}")
-            except Exception as e:
-                logger.error(f"Failed to send greeting: {e}")
+        # For now, we'll skip sending audio greetings since TTS is not implemented
+        logger.info(f"Connection established for {connection_id} - ready to receive audio")
     
-    def disconnect(self, connection_id: str):
-        """Remove WebSocket connection and clean up conversation history"""
-        if connection_id in self.active_connections:
-            del self.active_connections[connection_id]
-            logger.info(f"WebSocket disconnected: {connection_id}")
+    async def _process_audio_chunk(self, audio_b64: str, connection_id: str) -> Optional[str]:
+        """
+        Process incoming audio chunk
         
-        # Clean up conversation history
-        if hasattr(self, 'conversation_history') and connection_id in self.conversation_history:
-            del self.conversation_history[connection_id]
-            logger.info(f"Cleaned up conversation history for {connection_id}")
+        1. Convert audio to text using STT
+        2. Process with Claude AI if text is detected
+        3. Generate response text
+        4. Convert response to speech using TTS
+        5. Return base64 encoded audio response
+        """
+        try:
+            # Step 1: Convert audio to text
+            if not audio_processor.is_processor_available():
+                logger.warning("Audio processor not available for STT")
+                return None
+            
+            text = await audio_processor.process_audio_chunk(audio_b64, connection_id)
+            
+            if not text:
+                logger.debug(f"No speech detected for connection {connection_id}")
+                return None
+            
+            logger.info(f"🎤 User said: '{text}' (connection: {connection_id})")
+            
+            # Step 2: Generate AI response using Claude
+            if claude_service.is_available():
+                try:
+                    conversation_context = {
+                        'history': [],  # You might want to maintain conversation history per connection
+                        'current_input': text,
+                        'call_id': self.stream_metadata.get(connection_id, {}).get('call_id', ''),
+                        'context': {
+                            'connection_id': connection_id,
+                            'stream_id': self.stream_metadata.get(connection_id, {}).get('stream_id', ''),
+                            'source': 'voice_call'
+                        }
+                    }
+                    
+                    response_text = await claude_service.generate_conversation_response(conversation_context)
+                    logger.info(f"🤖 AI Response: '{response_text}' (connection: {connection_id})")
+                    
+                    # For now, we'll just log the AI response
+                    # TTS can be implemented later with other providers
+                    logger.info(f"💬 AI generated response (TTS not implemented): '{response_text}'")
+                    return None
+                        
+                except Exception as e:
+                    logger.error(f"Error generating AI response: {e}")
+                    return None
+            else:
+                logger.warning("Claude AI not available for response generation")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error in audio processing pipeline: {e}")
+            return None
         
-        # Clean up stream metadata
-        if connection_id in self.stream_metadata:
-            del self.stream_metadata[connection_id]
+        return None
     
     async def _send_audio_response(self, websocket: WebSocket, audio_b64: str):
         """Send audio response back to Teler"""
@@ -311,12 +233,6 @@ class TelerWebSocketHandler:
     def get_active_streams(self) -> Dict[str, Dict[str, Any]]:
         """Get all active stream metadata"""
         return self.stream_metadata.copy()
-    
-    def get_conversation_history(self, connection_id: str) -> list:
-        """Get conversation history for a specific connection"""
-        if not hasattr(self, 'conversation_history'):
-            return []
-        return self.conversation_history.get(connection_id, [])
 
 # Global instance
 websocket_handler = TelerWebSocketHandler()
