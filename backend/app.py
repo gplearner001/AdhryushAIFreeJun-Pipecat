@@ -239,12 +239,9 @@ async def  stream_flow(payload: CallFlowRequest):
         
         # Return the stream flow format that Teler expects
         flow_config = CallFlow.stream(
-            {
-                "action": "stream",
-                "ws_url": f"wss://{BACKEND_DOMAIN}/media-stream",
-                "chunk_size": 500,
-                "sample_rate": "8k"
-            }
+            action="stream",
+            ws_url=f"wss://{BACKEND_DOMAIN}/media-stream",
+            chunk_size=400,
         )
             
         return jsonify(flow_config)
