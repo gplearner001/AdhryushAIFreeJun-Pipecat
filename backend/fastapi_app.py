@@ -18,7 +18,6 @@ from dotenv import load_dotenv
 
 from websocket_handler import websocket_handler
 from claude_service import claude_service
-from audio_processor import audio_processor
 
 # Teler imports
 try:
@@ -145,9 +144,7 @@ async def health_check():
         'message': 'Teler FastAPI Service is running',
         'timestamp': datetime.now().isoformat(),
         'teler_available': TELER_AVAILABLE,
-        'claude_available': claude_service.is_available(),
-        'audio_processor_available': audio_processor.is_processor_available(),
-        'audio_processor_status': audio_processor.get_status()
+        'claude_available': claude_service.is_available()
     }
 
 @app.post("/flow", status_code=status.HTTP_200_OK)
@@ -400,12 +397,24 @@ async def get_websocket_streams():
         'count': len(streams)
     }
 
-@app.get("/api/audio/status")
-async def get_audio_status():
-    """Get audio processor status and capabilities."""
+@app.get("/api/websocket/stats/{connection_id}")
+async def get_connection_stats(connection_id: str):
+    """Get statistics for a specific WebSocket connection."""
+    stats = websocket_handler.get_connection_stats(connection_id)
+    if not stats:
+        raise HTTPException(status_code=404, detail="Connection not found")
     return {
         'success': True,
-        'data': audio_processor.get_status()
+        'data': stats
+    }
+
+@app.post("/api/websocket/toggle-processing")
+async def toggle_audio_processing(enabled: bool = Body(...)):
+    """Enable or disable audio processing to reduce load."""
+    websocket_handler.toggle_audio_processing(enabled)
+    return {
+        'success': True,
+        'message': f"Audio processing {'enabled' if enabled else 'disabled'}"
     }
 
 if __name__ == "__main__":
@@ -415,8 +424,6 @@ if __name__ == "__main__":
     logger.info(f"Starting Teler FastAPI Service on port {port}")
     logger.info(f"Teler library available: {TELER_AVAILABLE}")
     logger.info(f"Claude AI available: {claude_service.is_available()}")
-    logger.info(f"Audio processor available: {audio_processor.is_processor_available()}")
-    logger.info(f"Audio processor status: {audio_processor.get_status()}")
     
     uvicorn.run(
         "fastapi_app:app",
