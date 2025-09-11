@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 
 from websocket_handler import websocket_handler
 from claude_service import claude_service
+from sarvam_service import sarvam_service
 
 # Teler imports
 try:
@@ -144,7 +145,8 @@ async def health_check():
         'message': 'Teler FastAPI Service is running',
         'timestamp': datetime.now().isoformat(),
         'teler_available': TELER_AVAILABLE,
-        'claude_available': claude_service.is_available()
+        'claude_available': claude_service.is_available(),
+        'sarvam_available': sarvam_service.is_available()
     }
 
 @app.post("/flow", status_code=status.HTTP_200_OK)
@@ -404,6 +406,7 @@ if __name__ == "__main__":
     logger.info(f"Starting Teler FastAPI Service on port {port}")
     logger.info(f"Teler library available: {TELER_AVAILABLE}")
     logger.info(f"Claude AI available: {claude_service.is_available()}")
+    logger.info(f"Sarvam AI available: {sarvam_service.is_available()}")
     
     uvicorn.run(
         "fastapi_app:app",

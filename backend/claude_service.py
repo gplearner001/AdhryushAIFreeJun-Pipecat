@@ -152,14 +152,17 @@ class ClaudeService:
         
         return f"""
         You are an AI assistant helping with a voice call conversation. 
+        The conversation is happening in Hindi/English mixed language.
+        Please respond in Hindi when appropriate, and keep responses natural and conversational.
         
         Conversation history:
         {history_text}
         
         Current user input: {current_input}
         
-        Please provide a helpful, professional, and engaging response that continues the conversation naturally.
-        Keep responses concise and appropriate for a voice call context.
+        Please provide a helpful, professional, and engaging response in Hindi/English that continues the conversation naturally.
+        Keep responses concise (1-2 sentences) and appropriate for a voice call context.
+        Be warm and friendly in your tone.
         """
     
     def _parse_flow_response(self, response_text: str) -> Dict[str, Any]:
