@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { History, Phone, Clock, ExternalLink, RefreshCw, Radio } from 'lucide-react';
+import { History, Phone, Clock, ExternalLink, RefreshCw, Radio, MessageSquare, Mic } from 'lucide-react';
 import { CallHistoryItem } from '../types';
 import { apiService } from '../services/api';
 
@@ -10,6 +10,8 @@ interface CallHistoryProps {
 export const CallHistory: React.FC<CallHistoryProps> = ({ refreshTrigger }) => {
   const [history, setHistory] = useState<CallHistoryItem[]>([]);
   const [activeCalls, setActiveCalls] = useState<any[]>([]);
+  const [selectedCallConversation, setSelectedCallConversation] = useState<any[]>([]);
+  const [showConversation, setShowConversation] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
   const fetchHistory = async () => {
@@ -42,6 +44,19 @@ export const CallHistory: React.FC<CallHistoryProps> = ({ refreshTrigger }) => {
 
   const formatTimestamp = (timestamp: string) => {
     return new Date(timestamp).toLocaleString();
+  };
+
+  const fetchConversationHistory = async (connectionId: string) => {
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api/websocket/conversation/${connectionId}`);
+      const data = await response.json();
+      if (data.success) {
+        setSelectedCallConversation(data.data);
+        setShowConversation(connectionId);
+      }
+    } catch (error) {
+      console.error('Failed to fetch conversation history:', error);
+    }
   };
 
   const getStatusColor = (status: string) => {
@@ -118,6 +133,19 @@ export const CallHistory: React.FC<CallHistoryProps> = ({ refreshTrigger }) => {
                   <p className="text-gray-600">Started: <span className="font-medium text-gray-800">{formatTimestamp(call.started_at)}</span></p>
                   <p className="text-gray-600">Status: <span className="font-medium text-green-600">{call.status}</span></p>
                 </div>
+                <div className="mt-3 flex gap-2">
+                  <button
+                    onClick={() => fetchConversationHistory(call.connection_id)}
+                    className="flex items-center gap-1 px-3 py-1 text-xs bg-blue-100 text-blue-700 rounded-full hover:bg-blue-200 transition-colors"
+                  >
+                    <MessageSquare className="w-3 h-3" />
+                    View Conversation
+                  </button>
+                  <span className="flex items-center gap-1 px-3 py-1 text-xs bg-green-100 text-green-700 rounded-full">
+                    <Mic className="w-3 h-3" />
+                    Voice Active
+                  </span>
+                </div>
               </div>
             ))}
           </div>
@@ -176,6 +204,50 @@ export const CallHistory: React.FC<CallHistoryProps> = ({ refreshTrigger }) => {
                 </div>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Conversation History Modal */}
+      {showConversation && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-2xl w-full mx-4 max-h-96 overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
+                <MessageSquare className="w-5 h-5" />
+                Call Conversation History
+              </h3>
+              <button
+                onClick={() => setShowConversation(null)}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                ✕
+              </button>
+            </div>
+            
+            {selectedCallConversation.length === 0 ? (
+              <p className="text-gray-500 text-center py-4">No conversation history available</p>
+            ) : (
+              <div className="space-y-3">
+                {selectedCallConversation.map((message, index) => (
+                  <div
+                    key={index}
+                    className={`p-3 rounded-lg ${
+                      message.role === 'user' 
+                        ? 'bg-blue-50 border-l-4 border-blue-400' 
+                        : 'bg-gray-50 border-l-4 border-gray-400'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-sm font-medium text-gray-700">
+                        {message.role === 'user' ? '🎤 Caller' : '🤖 AI Assistant'}
+                      </span>
+                    </div>
+                    <p className="text-sm text-gray-800">{message.content}</p>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
