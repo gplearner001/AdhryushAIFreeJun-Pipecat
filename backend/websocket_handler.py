@@ -96,7 +96,7 @@ class TelerWebSocketHandler:
         
         # Process the audio with STT
         response_audio = await self._process_audio_chunk(audio_b64, connection_id)
-        logger.info("response_audio", response_audio)
+        logger.info("response_audio {response_audio}")
         
         # Send response audio back to Teler if we have any
         if response_audio:
