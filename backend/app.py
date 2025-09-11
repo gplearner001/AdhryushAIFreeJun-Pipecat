@@ -213,7 +213,7 @@ def health_check():
     })
 
 @app.route('/flow', methods=['POST'])
-def flow_endpoint():
+async def  stream_flow(payload: CallFlowRequest):
     """
     Call flow endpoint for teler.
     This endpoint handles the call flow and keeps the call active for conversation.
@@ -234,78 +234,19 @@ def flow_endpoint():
         
         # Return a call flow configuration that enables continuous conversation
         # Based on Teler's call flow documentation
-        flow_config = {
-            "type": "conversation",
-            "initial_message": "Hello! You are now connected. Please go ahead and speak.",
-            "conversation_mode": "bidirectional",
-            "keep_alive": True,
-            "max_duration": 1800,  # 30 minutes
-            "silence_timeout": 30,  # 30 seconds before prompting
-            "end_call_phrases": ["goodbye", "end call", "hang up", "bye"],
-            "steps": [
-                {
-                    "action": "answer_call",
-                    "auto_answer": True
-                },
-                {
-                    "action": "play_message",
-                    "text": "Hello! You are now connected. Please go ahead and speak.",
-                    "voice": "natural"
-                },
-                {
-                    "action": "enable_conversation",
-                    "mode": "continuous",
-                    "allow_interruption": True,
-                    "record": True
-                },
-                {
-                    "action": "monitor_silence",
-                    "timeout": 30,
-                    "prompt": "Are you still there? Please continue."
-                },
-                {
-                    "action": "detect_end_phrases",
-                    "phrases": ["goodbye", "end call", "hang up", "bye"],
-                    "farewell": "Thank you for calling. Goodbye!"
-                }
-            ],
-            "media_stream": {
-                "enabled": True,
-                "url": f"wss://{BACKEND_DOMAIN}/media-stream",
-                "format": "audio/wav",
-                "sample_rate": 8000
-            },
-            "recording": {
-                "enabled": True,
-                "format": "wav"
-            }
-        }
         
         logger.info(f"Generated call flow config for call {call_sid}")
         
         # Return the stream flow format that Teler expects
-        flow_config = {
-            "action": "stream",
-            "ws_url": f"wss://{BACKEND_DOMAIN}/media-stream",
-            "chunk_size": 500,
-            "sample_rate": "8k"
-        }
-        fallback_flow = {
-            "type": "simple",
-            "steps": [
-                {
-                    "action": "answer_call"
-                },
-                {
-                    "action": "play_message",
-                    "text": "Connected. Please speak."
-                },
-                {
-                    "action": "wait",
-                    "duration": 300
-                }
-            ]
-        }
+        flow_config = CallFlow.stream(
+            {
+                "action": "stream",
+                "ws_url": f"wss://{BACKEND_DOMAIN}/media-stream",
+                "chunk_size": 500,
+                "sample_rate": "8k"
+            }
+        )
+            
         return jsonify(flow_config)
     
     except Exception as e:
