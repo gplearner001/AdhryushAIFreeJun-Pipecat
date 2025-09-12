@@ -172,14 +172,36 @@ async def webhook_receiver(data: dict = Body(...)):
     """Handle webhook callbacks from Teler."""
     logger.info(f"--------Webhook Payload-------- {data}")
     
+    # Handle call completion events
+    event = data.get('event')
+    if event in ['call.completed', 'stream.completed']:
+        call_id = data.get('data', {}).get('call_id')
+        if call_id:
+            # Find and mark WebSocket connections as ended
+            for connection_id, metadata in websocket_handler.stream_metadata.items():
+                if metadata.get('call_id') == call_id:
+                    logger.info(f"Marking call as ended for connection: {connection_id}")
+                    if connection_id in websocket_handler.call_states:
+                        websocket_handler.call_states[connection_id]['call_ended'] = True
+                        websocket_handler.call_states[connection_id]['status'] = 'completed'
+                    
+                    # Cancel any ongoing silence monitoring
+                    if connection_id in websocket_handler.silence_timers:
+                        websocket_handler.silence_timers[connection_id].cancel()
+                        del websocket_handler.silence_timers[connection_id]
+    
     # Update call history with webhook data
-    call_id = data.get('call_id') or data.get('CallSid') or data.get('id')
+    call_id = data.get('call_id') or data.get('CallSid') or data.get('id') or data.get('data', {}).get('call_id')
     if call_id:
         for call in call_history:
             if call.get('call_id') == call_id:
                 call['webhook_data'] = data
-                call['status'] = data.get('status', call['status'])
+                call['status'] = data.get('status') or data.get('data', {}).get('status', call['status'])
                 call['updated_at'] = datetime.now().isoformat()
+                if event == 'call.completed':
+                    call['status'] = 'completed'
+                    call['end_time'] = data.get('data', {}).get('hangup_time')
+                    call['duration'] = data.get('data', {}).get('duration')
                 break
     
     return JSONResponse(content={"message": "Webhook received successfully"})

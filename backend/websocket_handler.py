@@ -12,7 +12,7 @@ import wave
 import io
 from typing import Dict, Any, Optional
 from fastapi import WebSocket, WebSocketDisconnect
-from datetime import datetime
+from datetime import datetime, timedelta
 from sarvam_service import sarvam_service
 from claude_service import claude_service
 
@@ -26,6 +26,8 @@ class TelerWebSocketHandler:
         self.stream_metadata: Dict[str, Dict[str, Any]] = {}
         self.chunk_counter = 1
         self.conversation_history: Dict[str, list] = {}
+        self.call_states: Dict[str, Dict[str, Any]] = {}
+        self.silence_timers: Dict[str, asyncio.Task] = {}
         
     async def connect(self, websocket: WebSocket, stream_id: str = None):
         """Accept WebSocket connection and store it"""
@@ -33,6 +35,19 @@ class TelerWebSocketHandler:
         connection_id = stream_id or f"conn_{datetime.now().timestamp()}"
         self.active_connections[connection_id] = websocket
         self.conversation_history[connection_id] = []
+        
+        # Initialize call state
+        self.call_states[connection_id] = {
+            'status': 'connected',
+            'last_user_speech': datetime.now(),
+            'last_ai_response': None,
+            'waiting_for_user': True,
+            'greeting_sent': False,
+            'call_ended': False,
+            'silence_warnings': 0,
+            'max_silence_warnings': 2
+        }
+        
         logger.info(f"WebSocket connected: {connection_id}")
         return connection_id
     
@@ -40,11 +55,22 @@ class TelerWebSocketHandler:
         """Remove WebSocket connection"""
         if connection_id in self.active_connections:
             del self.active_connections[connection_id]
-            if connection_id in self.conversation_history:
-                del self.conversation_history[connection_id]
-            if connection_id in self.stream_metadata:
-                del self.stream_metadata[connection_id]
-            logger.info(f"WebSocket disconnected: {connection_id}")
+            
+        if connection_id in self.conversation_history:
+            del self.conversation_history[connection_id]
+            
+        if connection_id in self.stream_metadata:
+            del self.stream_metadata[connection_id]
+            
+        if connection_id in self.call_states:
+            del self.call_states[connection_id]
+            
+        # Cancel silence timer if exists
+        if connection_id in self.silence_timers:
+            self.silence_timers[connection_id].cancel()
+            del self.silence_timers[connection_id]
+            
+        logger.info(f"WebSocket disconnected: {connection_id}")
     
     async def handle_incoming_message(self, websocket: WebSocket, message: str, connection_id: str):
         """
@@ -55,10 +81,15 @@ class TelerWebSocketHandler:
         - audio: Audio chunk from Teler
         """
         try:
+            # Check if call has ended
+            if self.call_states.get(connection_id, {}).get('call_ended', False):
+                logger.info(f"Ignoring message for ended call: {connection_id}")
+                return
+                
             data = json.loads(message)
             message_type = data.get("type")
             
-            logger.info(f"Received WebSocket message type: {message_type} for connection: {connection_id}")
+            logger.debug(f"Received WebSocket message type: {message_type} for connection: {connection_id}")
             
             if message_type == "start":
                 await self._handle_start_message(data, connection_id)
@@ -91,11 +122,25 @@ class TelerWebSocketHandler:
         
         logger.info(f"Stream metadata: {self.stream_metadata[connection_id]}")
         
-        # Send initial response or greeting
+        # Update call state
+        if connection_id in self.call_states:
+            self.call_states[connection_id]['status'] = 'active'
+        
+        # Send initial greeting after a short delay
+        await asyncio.sleep(1)  # Give time for connection to stabilize
         await self._send_initial_greeting(connection_id)
+        
+        # Start silence monitoring
+        await self._start_silence_monitoring(connection_id)
     
     async def _handle_audio_message(self, data: Dict[str, Any], connection_id: str, websocket: WebSocket):
         """Handle incoming audio chunk from Teler"""
+        # Check if call has ended
+        call_state = self.call_states.get(connection_id, {})
+        if call_state.get('call_ended', False):
+            logger.info(f"Ignoring audio for ended call: {connection_id}")
+            return
+            
         stream_id = data.get("stream_id")
         message_id = data.get("message_id")
         audio_b64 = data.get("data", {}).get("audio_b64")
@@ -104,25 +149,42 @@ class TelerWebSocketHandler:
             logger.warning("Received audio message without audio data")
             return
         
-        logger.info(f"🎤 Received audio chunk {message_id} for stream {stream_id} (size: {len(audio_b64)} chars)")
+        logger.debug(f"🎤 Received audio chunk {message_id} for stream {stream_id} (size: {len(audio_b64)} chars)")
         
-        # Process the audio (this is where you'd integrate with AI services, STT, etc.)
-        response_audio = await self._process_audio_chunk(audio_b64, connection_id)
-        
-        # Send response audio back to Teler if we have any
-        if response_audio:
-            logger.info(f"🔊 Sending audio response back to caller")
-            await self._send_audio_response(websocket, response_audio)
+        # Process the audio only if we're waiting for user input
+        if call_state.get('waiting_for_user', True):
+            response_audio = await self._process_audio_chunk(audio_b64, connection_id)
+            
+            # Send response audio back to Teler if we have any
+            if response_audio:
+                logger.info(f"🔊 Sending audio response back to caller")
+                await self._send_audio_response(websocket, response_audio)
+                
+                # Update call state - now waiting for user again
+                if connection_id in self.call_states:
+                    self.call_states[connection_id]['waiting_for_user'] = True
+                    self.call_states[connection_id]['last_ai_response'] = datetime.now()
+                
+                # Reset silence monitoring
+                await self._reset_silence_monitoring(connection_id)
+        else:
+            logger.debug(f"Ignoring audio chunk - not waiting for user input: {connection_id}")
     
     async def _send_initial_greeting(self, connection_id: str):
         """Send initial greeting audio to the caller"""
         websocket = self.active_connections.get(connection_id)
-        if not websocket:
+        call_state = self.call_states.get(connection_id, {})
+        
+        if not websocket or call_state.get('greeting_sent', False) or call_state.get('call_ended', False):
             return
         
+        # Mark greeting as sent
+        if connection_id in self.call_states:
+            self.call_states[connection_id]['greeting_sent'] = True
+            self.call_states[connection_id]['waiting_for_user'] = True
+        
         # This would typically be generated by TTS or pre-recorded
-        # For now, we'll simulate with a placeholder
-        greeting_text = "नमस्ते! आपका स्वागत है। कृपया बोलें।"  # "Hello! Welcome. Please speak."
+        greeting_text = "नमस्ते! मैं आपकी सहायता के लिए यहाँ हूँ। कृपया बताएं कि मैं आपकी कैसे मदद कर सकती हूँ?"
         
         # Generate greeting audio using Sarvam AI TTS
         greeting_audio = await sarvam_service.text_to_speech(
@@ -142,7 +204,12 @@ class TelerWebSocketHandler:
             
             try:
                 await websocket.send_text(json.dumps(greeting_message))
-                logger.info(f"✅ Sent Sarvam AI greeting to connection {connection_id}")
+                logger.info(f"✅ Sent greeting to connection {connection_id}")
+                
+                # Update call state
+                if connection_id in self.call_states:
+                    self.call_states[connection_id]['last_ai_response'] = datetime.now()
+                    
             except Exception as e:
                 logger.error(f"Failed to send greeting: {e}")
         else:
@@ -179,33 +246,68 @@ class TelerWebSocketHandler:
             logger.error(f"Error converting audio format: {e}")
             return audio_b64  # Return original if conversion fails
     
+    def _is_meaningful_speech(self, transcript: str) -> bool:
+        """Check if the transcript contains meaningful speech"""
+        if not transcript or not transcript.strip():
+            return False
+            
+        # Remove common filler words and check length
+        cleaned = transcript.strip().lower()
+        
+        # Ignore very short utterances or common fillers
+        filler_words = ['so', 'um', 'uh', 'hmm', 'ah', 'er', 'well']
+        
+        # If it's just a filler word, don't consider it meaningful
+        if cleaned in filler_words:
+            return False
+            
+        # If it's very short (less than 3 characters), likely not meaningful
+        if len(cleaned) < 3:
+            return False
+            
+        # If it's the same word repeated, might be noise
+        words = cleaned.split()
+        if len(words) == 1 and len(words[0]) < 4:
+            return False
+            
+        return True
+    
     async def _process_audio_chunk(self, audio_b64: str, connection_id: str) -> Optional[str]:
         """
-        Process incoming audio chunk
-        
-        1. Convert audio format for Sarvam AI
-        2. Use Sarvam AI STT to convert to text
-        3. Process with Claude AI for response
-        4. Use Sarvam AI TTS to generate response audio
-        5. Return base64 encoded response audio
+        Process incoming audio chunk with improved conversation flow
         """
-        logger.info(f"🔄 Processing audio chunk for connection {connection_id}")
+        logger.debug(f"🔄 Processing audio chunk for connection {connection_id}")
+        
+        call_state = self.call_states.get(connection_id, {})
+        if call_state.get('call_ended', False):
+            return None
         
         try:
             # Step 1: Convert audio format for Sarvam AI
             converted_audio = self._convert_audio_format(audio_b64)
             
             # Step 2: Convert speech to text using Sarvam AI
-            logger.info("🎯 Converting speech to text with Sarvam AI...")
+            logger.debug("🎯 Converting speech to text with Sarvam AI...")
             transcript = await sarvam_service.speech_to_text(converted_audio, language="en-IN")
             
             if not transcript or not transcript.strip():
-                logger.info("No speech detected in audio chunk")
+                logger.debug("No speech detected in audio chunk")
                 return None
             
-            logger.info(f"📝 Transcript: '{transcript}'")
+            # Step 3: Check if it's meaningful speech
+            if not self._is_meaningful_speech(transcript):
+                logger.debug(f"Ignoring non-meaningful speech: '{transcript}'")
+                return None
             
-            # Step 3: Add to conversation history
+            logger.info(f"📝 Meaningful transcript: '{transcript}'")
+            
+            # Step 4: Update call state - user has spoken
+            if connection_id in self.call_states:
+                self.call_states[connection_id]['last_user_speech'] = datetime.now()
+                self.call_states[connection_id]['waiting_for_user'] = False
+                self.call_states[connection_id]['silence_warnings'] = 0  # Reset warnings
+            
+            # Step 5: Add to conversation history
             if connection_id not in self.conversation_history:
                 self.conversation_history[connection_id] = []
             
@@ -214,22 +316,22 @@ class TelerWebSocketHandler:
                 "content": transcript
             })
             
-            # Step 4: Generate AI response using Claude
+            # Step 6: Generate AI response using Claude
             logger.info("🤖 Generating AI response with Claude...")
             ai_response = await self._generate_ai_response(transcript, connection_id)
             
             if not ai_response:
-                ai_response = "Im glad you spoke. Please tell me more."  # "I'm glad you spoke. Please tell me more."
+                ai_response = "मैं समझ गया। कृपया आगे बताएं।"  # "I understand. Please continue."
             
             logger.info(f"💬 AI Response: '{ai_response}'")
             
-            # Add AI response to conversation history
+            # Step 7: Add AI response to conversation history
             self.conversation_history[connection_id].append({
                 "role": "assistant",
                 "content": ai_response
             })
             
-            # Step 5: Convert AI response to speech using Sarvam AI
+            # Step 8: Convert AI response to speech using Sarvam AI
             logger.info("🔊 Converting AI response to speech with Sarvam AI...")
             response_audio = await sarvam_service.text_to_speech(
                 text=ai_response,
@@ -269,7 +371,8 @@ class TelerWebSocketHandler:
                 'context': {
                     'language': 'hindi',
                     'mode': 'voice_call',
-                    'platform': 'teler'
+                    'platform': 'teler',
+                    'instruction': 'Keep responses short and conversational. Wait for user to speak. Do not ask multiple questions at once.'
                 }
             }
             
@@ -295,6 +398,144 @@ class TelerWebSocketHandler:
             logger.debug(f"Sent audio response chunk {self.chunk_counter - 1}")
         except Exception as e:
             logger.error(f"Failed to send audio response: {e}")
+    
+    async def _start_silence_monitoring(self, connection_id: str):
+        """Start monitoring for silence and handle call timeout"""
+        if connection_id in self.silence_timers:
+            self.silence_timers[connection_id].cancel()
+        
+        self.silence_timers[connection_id] = asyncio.create_task(
+            self._monitor_silence(connection_id)
+        )
+    
+    async def _reset_silence_monitoring(self, connection_id: str):
+        """Reset silence monitoring timer"""
+        await self._start_silence_monitoring(connection_id)
+    
+    async def _monitor_silence(self, connection_id: str):
+        """Monitor for silence and handle timeouts"""
+        try:
+            while True:
+                await asyncio.sleep(30)  # Check every 30 seconds
+                
+                call_state = self.call_states.get(connection_id, {})
+                if call_state.get('call_ended', False):
+                    break
+                
+                last_speech = call_state.get('last_user_speech')
+                last_ai_response = call_state.get('last_ai_response')
+                
+                if not last_speech:
+                    continue
+                
+                # Calculate time since last meaningful user speech
+                time_since_speech = datetime.now() - last_speech
+                
+                # If no speech for 30 seconds, send warning or end call
+                if time_since_speech.total_seconds() >= 30:
+                    warnings = call_state.get('silence_warnings', 0)
+                    max_warnings = call_state.get('max_silence_warnings', 2)
+                    
+                    if warnings < max_warnings:
+                        # Send warning
+                        await self._send_silence_warning(connection_id, warnings + 1)
+                        if connection_id in self.call_states:
+                            self.call_states[connection_id]['silence_warnings'] = warnings + 1
+                    else:
+                        # End call
+                        await self._end_call_gracefully(connection_id)
+                        break
+                        
+        except asyncio.CancelledError:
+            logger.debug(f"Silence monitoring cancelled for {connection_id}")
+        except Exception as e:
+            logger.error(f"Error in silence monitoring: {e}")
+    
+    async def _send_silence_warning(self, connection_id: str, warning_number: int):
+        """Send a silence warning to the user"""
+        websocket = self.active_connections.get(connection_id)
+        if not websocket:
+            return
+        
+        if warning_number == 1:
+            warning_text = "क्या आप वहाँ हैं? कृपया बोलें।"  # "Are you there? Please speak."
+        else:
+            warning_text = "मैं आपका इंतज़ार कर रहा हूँ। कुछ और कहना चाहते हैं?"  # "I'm waiting for you. Anything else you'd like to say?"
+        
+        logger.info(f"Sending silence warning {warning_number} to {connection_id}")
+        
+        warning_audio = await sarvam_service.text_to_speech(
+            text=warning_text,
+            language="en-IN",
+            speaker="meera"
+        )
+        
+        if warning_audio:
+            warning_message = {
+                "type": "audio",
+                "audio_b64": warning_audio,
+                "chunk_id": self.chunk_counter
+            }
+            
+            self.chunk_counter += 1
+            
+            try:
+                await websocket.send_text(json.dumps(warning_message))
+                logger.info(f"✅ Sent silence warning {warning_number} to {connection_id}")
+            except Exception as e:
+                logger.error(f"Failed to send silence warning: {e}")
+    
+    async def _end_call_gracefully(self, connection_id: str):
+        """End the call gracefully with a thank you message"""
+        websocket = self.active_connections.get(connection_id)
+        if not websocket:
+            return
+        
+        # Mark call as ended
+        if connection_id in self.call_states:
+            self.call_states[connection_id]['call_ended'] = True
+            self.call_states[connection_id]['status'] = 'ended'
+        
+        farewell_text = "धन्यवाद आपने कॉल किया। आपका दिन शुभ हो। नमस्ते!"  # "Thank you for calling. Have a good day. Goodbye!"
+        
+        logger.info(f"Ending call gracefully for {connection_id}")
+        
+        farewell_audio = await sarvam_service.text_to_speech(
+            text=farewell_text,
+            language="en-IN",
+            speaker="meera"
+        )
+        
+        if farewell_audio:
+            farewell_message = {
+                "type": "audio",
+                "audio_b64": farewell_audio,
+                "chunk_id": self.chunk_counter
+            }
+            
+            self.chunk_counter += 1
+            
+            try:
+                await websocket.send_text(json.dumps(farewell_message))
+                logger.info(f"✅ Sent farewell message to {connection_id}")
+                
+                # Wait a bit for the message to be sent, then close
+                await asyncio.sleep(3)
+                
+            except Exception as e:
+                logger.error(f"Failed to send farewell message: {e}")
+        
+        # Cancel silence timer
+        if connection_id in self.silence_timers:
+            self.silence_timers[connection_id].cancel()
+            del self.silence_timers[connection_id]
+        
+        # Close the WebSocket connection
+        try:
+            await websocket.close(code=1000, reason="Call ended due to inactivity")
+            logger.info(f"✅ Closed WebSocket connection for {connection_id}")
+        except Exception as e:
+            logger.error(f"Error closing WebSocket: {e}")
     
     async def send_interrupt(self, connection_id: str, chunk_id: int):
         """Send interrupt message to stop specific chunk playback"""

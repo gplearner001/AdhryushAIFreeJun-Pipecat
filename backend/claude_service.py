@@ -154,22 +154,29 @@ class ClaudeService:
         """Build prompt for conversation response generation."""
         history = conversation_context.get('history', [])
         current_input = conversation_context.get('current_input', '')
+        context = conversation_context.get('context', {})
         
         history_text = "\n".join([f"{msg['role']}: {msg['content']}" for msg in history])
         
         return f"""
-        You are an AI assistant helping with a voice call conversation. 
-        The conversation is happening in Hindi/English mixed language.
-        Please respond in Hindi when appropriate, and keep responses natural and conversational.
+        You are an AI assistant in a voice call conversation in Hindi/English mixed language.
+        
+        IMPORTANT CONVERSATION RULES:
+        1. Keep responses SHORT (1-2 sentences maximum)
+        2. Respond naturally and conversationally in Hindi/English mix
+        3. DO NOT ask multiple questions in one response
+        4. Wait for the user to speak - don't dominate the conversation
+        5. Be helpful but concise
+        6. If user says something brief or unclear, ask ONE clarifying question
+        7. Don't repeat the same type of response multiple times
         
         Conversation history:
         {history_text}
         
         Current user input: {current_input}
         
-        Please provide a helpful, professional, and engaging response in Hindi/English that continues the conversation naturally.
-        Keep responses concise (1-2 sentences) and appropriate for a voice call context.
-        Be warm and friendly in your tone.
+        Provide a SHORT, helpful response that continues the conversation naturally.
+        Remember: This is a voice call - keep it brief and conversational!
         """
     
     def _parse_flow_response(self, response_text: str) -> Dict[str, Any]:
