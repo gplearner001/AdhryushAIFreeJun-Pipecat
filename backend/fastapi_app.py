@@ -405,6 +405,9 @@ if __name__ == "__main__":
     
     logger.info(f"Starting Teler FastAPI Service on port {port}")
     logger.info(f"Teler library available: {TELER_AVAILABLE}")
+    logger.info(f"Environment variables loaded:")
+    logger.info(f"  - ANTHROPIC_API_KEY: {'***' + os.getenv('ANTHROPIC_API_KEY', 'NOT_SET')[-4:] if os.getenv('ANTHROPIC_API_KEY') else 'NOT_SET'}")
+    logger.info(f"  - SARVAM_API_KEY: {'***' + os.getenv('SARVAM_API_KEY', 'NOT_SET')[-4:] if os.getenv('SARVAM_API_KEY') else 'NOT_SET'}")
     logger.info(f"Claude AI available: {claude_service.is_available()}")
     logger.info(f"Sarvam AI available: {sarvam_service.is_available()}")
     

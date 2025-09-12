@@ -24,23 +24,30 @@ class ClaudeService:
     
     def __init__(self):
         self.api_key = os.getenv('ANTHROPIC_API_KEY')
-        if not self.api_key or not ANTHROPIC_AVAILABLE:
-            if not self.api_key:
-                logger.warning("ANTHROPIC_API_KEY not found, Claude features will be disabled")
-            if not ANTHROPIC_AVAILABLE:
-                logger.warning("Anthropic library not available, Claude features will be disabled")
+        self.client = None
+        
+        logger.info(f"ANTHROPIC_API_KEY found: {bool(self.api_key)}")
+        logger.info(f"Anthropic library available: {ANTHROPIC_AVAILABLE}")
+        
+        if not ANTHROPIC_AVAILABLE:
+            logger.warning("Anthropic library not available, Claude features will be disabled")
+            return
+            
+        if not self.api_key:
+            logger.warning("ANTHROPIC_API_KEY not found, Claude features will be disabled")
+            return
+        
+        try:
+            # Initialize with minimal parameters to avoid any version conflicts
+            self.client = Anthropic(api_key=self.api_key)
+            logger.info("Claude service initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize Claude service: {str(e)}")
             self.client = None
-        else:
-            try:
-                self.client = Anthropic(api_key=self.api_key)
-                logger.info("Claude service initialized successfully")
-            except Exception as e:
-                logger.error(f"Failed to initialize Claude service: {str(e)}")
-                self.client = None
     
     def is_available(self) -> bool:
         """Check if Claude service is available."""
-        return self.client is not None and ANTHROPIC_AVAILABLE and self.api_key is not None
+        return self.client is not None
     
     async def generate_call_flow(self, call_context: Dict[str, Any]) -> Dict[str, Any]:
         """
