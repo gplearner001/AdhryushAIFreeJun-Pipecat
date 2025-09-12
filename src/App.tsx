@@ -5,6 +5,7 @@ import { CallHistory } from './components/CallHistory';
 import { StatusIndicator } from './components/StatusIndicator';
 import { AIStatusIndicator } from './components/AIStatusIndicator';
 import { AIConversationPanel } from './components/AIConversationPanel';
+import { WebSocketAudioClient } from './components/WebSocketAudioClient';
 
 function App() {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
@@ -25,15 +26,21 @@ function App() {
           </div>
         </div>
         
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
           <div>
             <CallForm onCallInitiated={handleCallInitiated} />
           </div>
           
           <div>
+            <WebSocketAudioClient />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          <div>
             <CallHistory refreshTrigger={refreshTrigger} />
           </div>
-
+          
           <div>
             <AIConversationPanel />
           </div>
