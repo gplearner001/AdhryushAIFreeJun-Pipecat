@@ -184,11 +184,17 @@ async def webhook_receiver(data: dict = Body(...)):
                     if connection_id in websocket_handler.call_states:
                         websocket_handler.call_states[connection_id]['call_ended'] = True
                         websocket_handler.call_states[connection_id]['status'] = 'completed'
+                        websocket_handler.call_states[connection_id]['is_processing'] = False
                     
                     # Cancel any ongoing silence monitoring
                     if connection_id in websocket_handler.silence_timers:
                         websocket_handler.silence_timers[connection_id].cancel()
                         del websocket_handler.silence_timers[connection_id]
+                    
+                    # Clear audio buffer to prevent further processing
+                    if connection_id in websocket_handler.audio_buffers:
+                        websocket_handler.audio_buffers[connection_id].clear()
+                        logger.info(f"🧹 Cleared audio buffer for ended call: {connection_id}")
     
     # Update call history with webhook data
     call_id = data.get('call_id') or data.get('CallSid') or data.get('id') or data.get('data', {}).get('call_id')

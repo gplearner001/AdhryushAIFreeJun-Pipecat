@@ -28,6 +28,8 @@ class TelerWebSocketHandler:
         self.conversation_history: Dict[str, list] = {}
         self.call_states: Dict[str, Dict[str, Any]] = {}
         self.silence_timers: Dict[str, asyncio.Task] = {}
+        self.audio_buffers: Dict[str, list] = {}  # Buffer audio chunks
+        self.processing_locks: Dict[str, asyncio.Lock] = {}  # Prevent concurrent processing
         
     async def connect(self, websocket: WebSocket, stream_id: str = None):
         """Accept WebSocket connection and store it"""
@@ -35,17 +37,21 @@ class TelerWebSocketHandler:
         connection_id = stream_id or f"conn_{datetime.now().timestamp()}"
         self.active_connections[connection_id] = websocket
         self.conversation_history[connection_id] = []
+        self.audio_buffers[connection_id] = []
+        self.processing_locks[connection_id] = asyncio.Lock()
         
         # Initialize call state
         self.call_states[connection_id] = {
             'status': 'connected',
-            'last_user_speech': datetime.now(),
+            'last_user_speech': None,
             'last_ai_response': None,
             'waiting_for_user': True,
             'greeting_sent': False,
             'call_ended': False,
             'silence_warnings': 0,
-            'max_silence_warnings': 2
+            'max_silence_warnings': 2,
+            'is_processing': False,
+            'last_meaningful_speech': None
         }
         
         logger.info(f"WebSocket connected: {connection_id}")
@@ -65,6 +71,12 @@ class TelerWebSocketHandler:
         if connection_id in self.call_states:
             del self.call_states[connection_id]
             
+        if connection_id in self.audio_buffers:
+            del self.audio_buffers[connection_id]
+            
+        if connection_id in self.processing_locks:
+            del self.processing_locks[connection_id]
+            
         # Cancel silence timer if exists
         if connection_id in self.silence_timers:
             self.silence_timers[connection_id].cancel()
@@ -81,9 +93,10 @@ class TelerWebSocketHandler:
         - audio: Audio chunk from Teler
         """
         try:
-            # Check if call has ended
-            if self.call_states.get(connection_id, {}).get('call_ended', False):
-                logger.info(f"Ignoring message for ended call: {connection_id}")
+            # Check if call has ended - FIRST CHECK
+            call_state = self.call_states.get(connection_id, {})
+            if call_state.get('call_ended', False):
+                logger.debug(f"Ignoring message for ended call: {connection_id}")
                 return
                 
             data = json.loads(message)
@@ -134,11 +147,11 @@ class TelerWebSocketHandler:
         await self._start_silence_monitoring(connection_id)
     
     async def _handle_audio_message(self, data: Dict[str, Any], connection_id: str, websocket: WebSocket):
-        """Handle incoming audio chunk from Teler"""
-        # Check if call has ended
+        """Handle incoming audio chunk from Teler - BUFFER APPROACH"""
+        # Check if call has ended - CRITICAL CHECK
         call_state = self.call_states.get(connection_id, {})
         if call_state.get('call_ended', False):
-            logger.info(f"Ignoring audio for ended call: {connection_id}")
+            logger.debug(f"🚫 Ignoring audio for ended call: {connection_id}")
             return
             
         stream_id = data.get("stream_id")
@@ -149,26 +162,170 @@ class TelerWebSocketHandler:
             logger.warning("Received audio message without audio data")
             return
         
-        logger.debug(f"🎤 Received audio chunk {message_id} for stream {stream_id} (size: {len(audio_b64)} chars)")
+        logger.debug(f"🎤 Buffering audio chunk {message_id} for stream {stream_id}")
         
-        # Process the audio only if we're waiting for user input
-        if call_state.get('waiting_for_user', True):
-            response_audio = await self._process_audio_chunk(audio_b64, connection_id)
+        # Add to audio buffer instead of processing immediately
+        if connection_id in self.audio_buffers:
+            self.audio_buffers[connection_id].append({
+                'audio_b64': audio_b64,
+                'message_id': message_id,
+                'timestamp': datetime.now()
+            })
+        
+        # Only process if we're waiting for user input and not already processing
+        if (call_state.get('waiting_for_user', True) and 
+            not call_state.get('is_processing', False)):
             
-            # Send response audio back to Teler if we have any
+            # Start processing after a short delay to accumulate more audio
+            await asyncio.sleep(0.5)  # Wait 500ms to accumulate audio
+            await self._process_accumulated_audio(connection_id, websocket)
+    
+    async def _process_accumulated_audio(self, connection_id: str, websocket: WebSocket):
+        """Process accumulated audio chunks"""
+        # Use lock to prevent concurrent processing
+        async with self.processing_locks.get(connection_id, asyncio.Lock()):
+            call_state = self.call_states.get(connection_id, {})
+            
+            # Double check call hasn't ended
+            if call_state.get('call_ended', False):
+                logger.debug(f"🚫 Call ended during processing: {connection_id}")
+                return
+                
+            # Check if already processing
+            if call_state.get('is_processing', False):
+                logger.debug(f"⏳ Already processing audio for: {connection_id}")
+                return
+            
+            # Mark as processing
+            if connection_id in self.call_states:
+                self.call_states[connection_id]['is_processing'] = True
+            
+            try:
+                # Get accumulated audio chunks
+                audio_chunks = self.audio_buffers.get(connection_id, [])
+                if not audio_chunks:
+                    return
+                
+                logger.info(f"🔄 Processing {len(audio_chunks)} accumulated audio chunks for {connection_id}")
+                
+                # Combine audio chunks
+                combined_audio = self._combine_audio_chunks(audio_chunks)
+                
+                # Clear the buffer
+                self.audio_buffers[connection_id] = []
+                
+                # Process the combined audio
+                transcript = await self._convert_audio_to_text(combined_audio, connection_id)
+                
+                if transcript and self._is_meaningful_speech(transcript):
+                    logger.info(f"📝 USER SAID: '{transcript}' (Connection: {connection_id})")
+                    
+                    # Update call state - user has spoken meaningfully
+                    if connection_id in self.call_states:
+                        self.call_states[connection_id]['last_user_speech'] = datetime.now()
+                        self.call_states[connection_id]['last_meaningful_speech'] = transcript
+                        self.call_states[connection_id]['waiting_for_user'] = False
+                        self.call_states[connection_id]['silence_warnings'] = 0
+                    
+                    # Add to conversation history
+                    if connection_id not in self.conversation_history:
+                        self.conversation_history[connection_id] = []
+                    
+                    self.conversation_history[connection_id].append({
+                        "role": "user",
+                        "content": transcript
+                    })
+                    
+                    # Generate and send AI response
+                    await self._generate_and_send_ai_response(transcript, connection_id, websocket)
+                    
+                    # Reset silence monitoring
+                    await self._reset_silence_monitoring(connection_id)
+                else:
+                    logger.debug(f"🔇 No meaningful speech detected in accumulated audio for {connection_id}")
+                    
+            except Exception as e:
+                logger.error(f"❌ Error processing accumulated audio: {e}")
+            finally:
+                # Mark as not processing
+                if connection_id in self.call_states:
+                    self.call_states[connection_id]['is_processing'] = False
+    
+    def _combine_audio_chunks(self, audio_chunks: list) -> str:
+        """Combine multiple audio chunks into one"""
+        try:
+            combined_data = b''
+            for chunk in audio_chunks:
+                audio_data = base64.b64decode(chunk['audio_b64'])
+                combined_data += audio_data
+            
+            # Encode back to base64
+            return base64.b64encode(combined_data).decode('utf-8')
+        except Exception as e:
+            logger.error(f"Error combining audio chunks: {e}")
+            # Return the first chunk if combination fails
+            return audio_chunks[0]['audio_b64'] if audio_chunks else ""
+    
+    async def _convert_audio_to_text(self, audio_b64: str, connection_id: str) -> Optional[str]:
+        """Convert audio to text using Sarvam AI"""
+        try:
+            # Convert audio format for Sarvam AI
+            converted_audio = self._convert_audio_format(audio_b64)
+            
+            # Convert speech to text using Sarvam AI
+            logger.debug("🎯 Converting accumulated speech to text with Sarvam AI...")
+            transcript = await sarvam_service.speech_to_text(converted_audio, language="en-IN")
+            
+            if transcript and transcript.strip():
+                logger.info(f"📝 STT Result: '{transcript}' (Connection: {connection_id})")
+                return transcript.strip()
+            else:
+                logger.debug(f"🔇 No speech detected in accumulated audio")
+                return None
+                
+        except Exception as e:
+            logger.error(f"❌ Error converting audio to text: {e}")
+            return None
+    
+    async def _generate_and_send_ai_response(self, user_input: str, connection_id: str, websocket: WebSocket):
+        """Generate AI response and send it back"""
+        try:
+            # Generate AI response using Claude
+            logger.info("🤖 Generating AI response with Claude...")
+            ai_response = await self._generate_ai_response(user_input, connection_id)
+            
+            if not ai_response:
+                ai_response = "मैं समझ गया। कृपया आगे बताएं।"  # "I understand. Please continue."
+            
+            logger.info(f"💬 AI Response: '{ai_response}'")
+            
+            # Add AI response to conversation history
+            self.conversation_history[connection_id].append({
+                "role": "assistant",
+                "content": ai_response
+            })
+            
+            # Convert AI response to speech using Sarvam AI
+            logger.info("🔊 Converting AI response to speech with Sarvam AI...")
+            response_audio = await sarvam_service.text_to_speech(
+                text=ai_response,
+                language="en-IN",
+                speaker="meera"
+            )
+            
             if response_audio:
-                logger.info(f"🔊 Sending audio response back to caller")
                 await self._send_audio_response(websocket, response_audio)
+                logger.info("✅ AI response sent successfully")
                 
                 # Update call state - now waiting for user again
                 if connection_id in self.call_states:
                     self.call_states[connection_id]['waiting_for_user'] = True
                     self.call_states[connection_id]['last_ai_response'] = datetime.now()
+            else:
+                logger.error("❌ Failed to generate response audio")
                 
-                # Reset silence monitoring
-                await self._reset_silence_monitoring(connection_id)
-        else:
-            logger.debug(f"Ignoring audio chunk - not waiting for user input: {connection_id}")
+        except Exception as e:
+            logger.error(f"❌ Error generating and sending AI response: {e}")
     
     async def _send_initial_greeting(self, connection_id: str):
         """Send initial greeting audio to the caller"""
@@ -183,7 +340,6 @@ class TelerWebSocketHandler:
             self.call_states[connection_id]['greeting_sent'] = True
             self.call_states[connection_id]['waiting_for_user'] = True
         
-        # This would typically be generated by TTS or pre-recorded
         greeting_text = "नमस्ते! मैं आपकी सहायता के लिए यहाँ हूँ। कृपया बताएं कि मैं आपकी कैसे मदद कर सकती हूँ?"
         
         # Generate greeting audio using Sarvam AI TTS
@@ -216,17 +372,12 @@ class TelerWebSocketHandler:
             logger.warning("Failed to generate greeting audio with Sarvam AI")
     
     def _convert_audio_format(self, audio_b64: str) -> str:
-        """
-        Convert Teler audio format to format suitable for Sarvam AI.
-        Teler sends audio/l16 at 8000Hz, which should work with Sarvam AI.
-        """
-        
+        """Convert Teler audio format to format suitable for Sarvam AI"""
         try:
             # Decode base64 audio
             audio_data = base64.b64decode(audio_b64)
             
             # Create WAV format for Sarvam AI
-            # Teler sends raw PCM data, we need to wrap it in WAV format
             wav_buffer = io.BytesIO()
             
             with wave.open(wav_buffer, 'wb') as wav_file:
@@ -255,100 +406,29 @@ class TelerWebSocketHandler:
         cleaned = transcript.strip().lower()
         
         # Ignore very short utterances or common fillers
-        filler_words = ['so', 'um', 'uh', 'hmm', 'ah', 'er', 'well']
+        filler_words = ['so', 'um', 'uh', 'hmm', 'ah', 'er', 'well', 'and', 'the', 'but', 'oh']
         
         # If it's just a filler word, don't consider it meaningful
         if cleaned in filler_words:
+            logger.debug(f"Ignoring filler word: '{cleaned}'")
             return False
             
-        # If it's very short (less than 3 characters), likely not meaningful
-        if len(cleaned) < 3:
+        # If it's very short (less than 4 characters), likely not meaningful
+        if len(cleaned) < 4:
+            logger.debug(f"Ignoring short utterance: '{cleaned}'")
             return False
             
         # If it's the same word repeated, might be noise
         words = cleaned.split()
-        if len(words) == 1 and len(words[0]) < 4:
+        if len(words) == 1 and len(words[0]) < 5:
+            logger.debug(f"Ignoring single short word: '{cleaned}'")
             return False
-            
-        return True
-    
-    async def _process_audio_chunk(self, audio_b64: str, connection_id: str) -> Optional[str]:
-        """
-        Process incoming audio chunk with improved conversation flow
-        """
-        logger.debug(f"🔄 Processing audio chunk for connection {connection_id}")
         
-        call_state = self.call_states.get(connection_id, {})
-        if call_state.get('call_ended', False):
-            return None
-        
-        try:
-            # Step 1: Convert audio format for Sarvam AI
-            converted_audio = self._convert_audio_format(audio_b64)
+        # Check if it's a meaningful sentence (has at least 2 words or one long word)
+        if len(words) >= 2 or (len(words) == 1 and len(words[0]) >= 5):
+            return True
             
-            # Step 2: Convert speech to text using Sarvam AI
-            logger.debug("🎯 Converting speech to text with Sarvam AI...")
-            transcript = await sarvam_service.speech_to_text(converted_audio, language="en-IN")
-            
-            if not transcript or not transcript.strip():
-                logger.debug("No speech detected in audio chunk")
-                return None
-            
-            # Step 3: Check if it's meaningful speech
-            if not self._is_meaningful_speech(transcript):
-                logger.debug(f"Ignoring non-meaningful speech: '{transcript}'")
-                return None
-            
-            logger.info(f"📝 Meaningful transcript: '{transcript}'")
-            
-            # Step 4: Update call state - user has spoken
-            if connection_id in self.call_states:
-                self.call_states[connection_id]['last_user_speech'] = datetime.now()
-                self.call_states[connection_id]['waiting_for_user'] = False
-                self.call_states[connection_id]['silence_warnings'] = 0  # Reset warnings
-            
-            # Step 5: Add to conversation history
-            if connection_id not in self.conversation_history:
-                self.conversation_history[connection_id] = []
-            
-            self.conversation_history[connection_id].append({
-                "role": "user",
-                "content": transcript
-            })
-            
-            # Step 6: Generate AI response using Claude
-            logger.info("🤖 Generating AI response with Claude...")
-            ai_response = await self._generate_ai_response(transcript, connection_id)
-            
-            if not ai_response:
-                ai_response = "मैं समझ गया। कृपया आगे बताएं।"  # "I understand. Please continue."
-            
-            logger.info(f"💬 AI Response: '{ai_response}'")
-            
-            # Step 7: Add AI response to conversation history
-            self.conversation_history[connection_id].append({
-                "role": "assistant",
-                "content": ai_response
-            })
-            
-            # Step 8: Convert AI response to speech using Sarvam AI
-            logger.info("🔊 Converting AI response to speech with Sarvam AI...")
-            response_audio = await sarvam_service.text_to_speech(
-                text=ai_response,
-                language="en-IN",
-                speaker="meera"
-            )
-            
-            if response_audio:
-                logger.info("✅ Successfully generated response audio")
-                return response_audio
-            else:
-                logger.error("❌ Failed to generate response audio")
-                return None
-                
-        except Exception as e:
-            logger.error(f"❌ Error processing audio chunk: {str(e)}")
-            return None
+        return False
     
     async def _generate_ai_response(self, user_input: str, connection_id: str) -> Optional[str]:
         """Generate AI response using Claude based on user input and conversation history."""
@@ -372,7 +452,7 @@ class TelerWebSocketHandler:
                     'language': 'hindi',
                     'mode': 'voice_call',
                     'platform': 'teler',
-                    'instruction': 'Keep responses short and conversational. Wait for user to speak. Do not ask multiple questions at once.'
+                    'instruction': 'Keep responses very short (1-2 sentences max). Wait for user to speak. Listen more, talk less.'
                 }
             }
             
@@ -423,7 +503,6 @@ class TelerWebSocketHandler:
                     break
                 
                 last_speech = call_state.get('last_user_speech')
-                last_ai_response = call_state.get('last_ai_response')
                 
                 if not last_speech:
                     continue
