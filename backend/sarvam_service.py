@@ -9,6 +9,8 @@ import base64
 import logging
 import aiohttp
 import asyncio
+import tempfile
+import io
 from typing import Optional, Dict, Any
 from dotenv import load_dotenv
 
@@ -32,13 +34,13 @@ class SarvamAIService:
         """Check if Sarvam AI service is available."""
         return self.api_key is not None
     
-    async def speech_to_text(self, audio_base64: str, language: str = "hi-IN") -> Optional[str]:
+    async def speech_to_text(self, audio_base64: str, language: str = "en-IN") -> Optional[str]:
         """
         Convert speech to text using Sarvam AI STT API.
         
         Args:
             audio_base64: Base64 encoded audio data
-            language: Language code (default: hi-IN for Hindi)
+            language: Language code (default: en-IN for Hindi)
             
         Returns:
             Transcribed text or None if failed
@@ -50,50 +52,64 @@ class SarvamAIService:
         try:
             logger.info(f"Converting speech to text using Sarvam AI (language: {language})")
             
-            # Prepare the request payload
-            payload = {
-                "language_code": language,
-                "model": "saaras:v1",
-                "file": audio_base64
-            }
+            # Convert base64 to MP3 file
+            audio_data = base64.b64decode(audio_base64)
             
-            headers = {
-                "API-Subscription-Key": self.api_key,
-                "Content-Type": "application/json"
-            }
+            # Create temporary MP3 file
+            with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as temp_file:
+                temp_file.write(audio_data)
+                temp_file_path = temp_file.name
             
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{self.base_url}/speech-to-text",
-                    json=payload,
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=30)
-                ) as response:
-                    
-                    if response.status == 200:
-                        result = await response.json()
-                        transcript = result.get("transcript", "")
-                        logger.info(f"STT successful: '{transcript}'")
-                        return transcript
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"Sarvam STT API error {response.status}: {error_text}")
-                        return None
+            # Prepare multipart form data
+            data = aiohttp.FormData()
+            data.add_field('language_code', language)
+            data.add_field('model', 'saarika:v2.5')
+            
+            # Add the MP3 file
+            with open(temp_file_path, 'rb') as f:
+                data.add_field('file', f, filename='audio.mp3', content_type='audio/mpeg')
+                
+                headers = {
+                    "API-Subscription-Key": self.api_key
+                }
+                
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        f"{self.base_url}/speech-to-text",
+                        data=data,
+                        headers=headers,
+                        timeout=aiohttp.ClientTimeout(total=30)
+                    ) as response:
                         
-        except asyncio.TimeoutError:
-            logger.error("Sarvam STT API timeout")
-            return None
+                        if response.status == 200:
+                            result = await response.json()
+                            transcript = result.get("transcript", "")
+                            logger.info(f"STT successful: '{transcript}'")
+                            return transcript
+                        else:
+                            error_text = await response.text()
+                            logger.error(f"Sarvam STT API error {response.status}: {error_text}")
+                            return None
+            
         except Exception as e:
             logger.error(f"Error in Sarvam STT: {str(e)}")
             return None
+        finally:
+            # Clean up temporary file
+            try:
+                if 'temp_file_path' in locals():
+                    os.unlink(temp_file_path)
+            except Exception as e:
+                logger.warning(f"Failed to clean up temp file: {e}")
+                        
     
-    async def text_to_speech(self, text: str, language: str = "hi-IN", speaker: str = "meera") -> Optional[str]:
+    async def text_to_speech(self, text: str, language: str = "en-IN", speaker: str = "meera") -> Optional[str]:
         """
         Convert text to speech using Sarvam AI TTS API.
         
         Args:
             text: Text to convert to speech
-            language: Language code (default: hi-IN for Hindi)
+            language: Language code (default: en-IN for Hindi)
             speaker: Speaker voice (default: meera)
             
         Returns:
@@ -164,16 +180,16 @@ class SarvamAIService:
             Detected language code or None if failed
         """
         if not self.is_available():
-            return "hi-IN"  # Default to Hindi
+            return "en-IN"  # Default to Hindi
         
         try:
             # For now, return default language
             # You can implement language detection if Sarvam AI supports it
-            return "hi-IN"
+            return "en-IN"
             
         except Exception as e:
             logger.error(f"Error in language detection: {str(e)}")
-            return "hi-IN"
+            return "en-IN"
 
 # Global instance
 sarvam_service = SarvamAIService()

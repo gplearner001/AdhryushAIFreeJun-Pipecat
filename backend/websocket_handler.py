@@ -127,7 +127,7 @@ class TelerWebSocketHandler:
         # Generate greeting audio using Sarvam AI TTS
         greeting_audio = await sarvam_service.text_to_speech(
             text=greeting_text,
-            language="hi-IN",
+            language="en-IN",
             speaker="meera"
         )
         
@@ -197,7 +197,7 @@ class TelerWebSocketHandler:
             
             # Step 2: Convert speech to text using Sarvam AI
             logger.info("🎯 Converting speech to text with Sarvam AI...")
-            transcript = await sarvam_service.speech_to_text(converted_audio, language="hi-IN")
+            transcript = await sarvam_service.speech_to_text(converted_audio, language="en-IN")
             
             if not transcript or not transcript.strip():
                 logger.info("No speech detected in audio chunk")
@@ -219,7 +219,7 @@ class TelerWebSocketHandler:
             ai_response = await self._generate_ai_response(transcript, connection_id)
             
             if not ai_response:
-                ai_response = "मुझे खुशी है कि आपने बात की। कृपया और बताएं।"  # "I'm glad you spoke. Please tell me more."
+                ai_response = "Im glad you spoke. Please tell me more."  # "I'm glad you spoke. Please tell me more."
             
             logger.info(f"💬 AI Response: '{ai_response}'")
             
@@ -233,7 +233,7 @@ class TelerWebSocketHandler:
             logger.info("🔊 Converting AI response to speech with Sarvam AI...")
             response_audio = await sarvam_service.text_to_speech(
                 text=ai_response,
-                language="hi-IN",
+                language="en-IN",
                 speaker="meera"
             )
             

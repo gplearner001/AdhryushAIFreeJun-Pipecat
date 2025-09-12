@@ -10287,3 +10287,7 @@ backend/myenv/Lib/site-packages/__pycache__/typing_extensions.cpython-311.pyc
 backend/myenv/Lib/site-packages/__pycache__/six.cpython-311.pyc
 backend/myenv/Lib/site-packages/__pycache__/pythoncom.cpython-311.pyc
 backend/myenv/Include/site/python3.11/greenlet/greenlet.h
+backend/__pycache__/claude_service.cpython-311.pyc
+backend/__pycache__/fastapi_app.cpython-311.pyc
+backend/__pycache__/sarvam_service.cpython-311.pyc
+backend/__pycache__/websocket_handler.cpython-311.pyc
