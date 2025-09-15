@@ -376,6 +376,7 @@ async def handle_media_stream(websocket: WebSocket):
             try:
                 # Receive message from Teler
                 message = await websocket.receive_text()
+                logger.info(f"Received message: {message}")
                 logger.debug(f"Received message: {message[:100]}...")
                 
                 # Handle the message
