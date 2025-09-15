@@ -54,7 +54,6 @@ class SarvamAIService:
             logger.info(f"Converting speech to text using Sarvam AI (language: {language})")
             
             # Convert base64 to MP3 file
-            logger.info(f"audio base64 string: {audio_base64}")
             audio_data = base64.b64decode(audio_base64)
             
             # Create temporary MP3 file
@@ -69,7 +68,7 @@ class SarvamAIService:
             
             # Add the MP3 file
             with open(temp_file_path, 'rb') as f:
-                data.add_field('file', f, filename='audio.mp3', content_type='audio/webm')
+                data.add_field('file', f, filename='audio.mp3', content_type='audio/mpeg')
                 
                 headers = {
                     "API-Subscription-Key": self.api_key
