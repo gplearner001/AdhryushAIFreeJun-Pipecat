@@ -55,6 +55,7 @@ class SarvamAIService:
             
             # Convert base64 to MP3 file
             audio_data = base64.b64decode(audio_base64)
+            logger.info(f"Decoded audio data : {audio_data}")
             
             # Create temporary MP3 file
             with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as temp_file:
