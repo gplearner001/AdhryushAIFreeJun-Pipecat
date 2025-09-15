@@ -160,7 +160,7 @@ async def stream_flow(payload: CallFlowRequest):
     # Create stream flow configuration
     stream_flow = CallFlow.stream(
         ws_url=f"wss://{BACKEND_DOMAIN}/media-stream",
-        chunk_size=500,
+        chunk_size=2000,
         record=True
     )
     
