@@ -269,16 +269,18 @@ class TelerWebSocketHandler:
     async def _convert_audio_to_text(self, audio_b64: str, connection_id: str) -> Optional[str]:
         """Convert audio to text using Sarvam AI"""
         try:
+            logger.info(f"🎯 Converting audio to text for connection: {connection_id}")
+            logger.debug(f"Audio data length: {len(audio_b64)} base64 characters")
             
             # Convert speech to text using Sarvam AI
-            logger.debug("🎯 Converting accumulated speech to text with Sarvam AI...")
+            logger.info("🎯 Converting accumulated speech to text with Sarvam AI...")
             transcript = await sarvam_service.speech_to_text(audio_b64, language="en-IN")
             
             if transcript and transcript.strip():
                 logger.info(f"📝 STT Result: '{transcript}' (Connection: {connection_id})")
                 return transcript.strip()
             else:
-                logger.debug(f"🔇 No speech detected in accumulated audio")
+                logger.info(f"🔇 No speech detected in accumulated audio for {connection_id}")
                 return None
                 
         except Exception as e:

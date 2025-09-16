@@ -11,9 +11,10 @@ import aiohttp
 import asyncio
 import tempfile
 import io
+import struct
+import wave
 from typing import Optional, Dict, Any
 from dotenv import load_dotenv
-import base64
 
 load_dotenv()
 
@@ -53,14 +54,22 @@ class SarvamAIService:
         try:
             logger.info(f"Converting speech to text using Sarvam AI (language: {language})")
             
-            # Convert base64 to MP3 file
+            # Decode base64 audio data (raw PCM from Teler)
             audio_data = base64.b64decode(audio_base64)
-            #logger.info(f"Decoded audio data : {audio_data}")
+            logger.info(f"Decoded raw audio data: {len(audio_data)} bytes")
             
-            # Create temporary MP3 file
-            with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as temp_file:
-                temp_file.write(audio_data)
+            # Convert raw PCM to WAV format
+            wav_data = self._convert_raw_pcm_to_wav(audio_data)
+            if not wav_data:
+                logger.error("Failed to convert raw PCM to WAV format")
+                return None
+            
+            # Create temporary WAV file
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
+                temp_file.write(wav_data)
                 temp_file_path = temp_file.name
+            
+            logger.info(f"Temporary WAV file created at: {temp_file_path}")
             
             # Prepare multipart form data
             data = aiohttp.FormData()
@@ -69,7 +78,7 @@ class SarvamAIService:
             
             # Add the MP3 file
             with open(temp_file_path, 'rb') as f:
-                data.add_field('file', f, filename='audio.mp3', content_type='audio/mpeg')
+                data.add_field('file', f, filename='audio.wav', content_type='audio/wav')
                 
                 headers = {
                     "API-Subscription-Key": self.api_key
@@ -104,6 +113,81 @@ class SarvamAIService:
             except Exception as e:
                 logger.warning(f"Failed to clean up temp file: {e}")
                         
+    def _convert_raw_pcm_to_wav(self, raw_audio_data: bytes, sample_rate: int = 8000, channels: int = 1, sample_width: int = 2) -> Optional[bytes]:
+        """
+        Convert raw PCM audio data to WAV format.
+        
+        Args:
+            raw_audio_data: Raw PCM audio bytes from Teler
+            sample_rate: Sample rate in Hz (default: 8000 for Teler)
+            channels: Number of audio channels (default: 1 for mono)
+            sample_width: Sample width in bytes (default: 2 for 16-bit)
+            
+        Returns:
+            WAV formatted audio data as bytes
+        """
+        try:
+            logger.info(f"Converting raw PCM to WAV: {len(raw_audio_data)} bytes, {sample_rate}Hz, {channels} channel(s), {sample_width*8}-bit")
+            
+            # Validate input data
+            if len(raw_audio_data) == 0:
+                logger.error("Empty audio data provided")
+                return None
+            
+            # Ensure data length is aligned to sample width
+            expected_alignment = sample_width * channels
+            if len(raw_audio_data) % expected_alignment != 0:
+                # Pad with zeros to align
+                padding_needed = expected_alignment - (len(raw_audio_data) % expected_alignment)
+                raw_audio_data += b'\x00' * padding_needed
+                logger.info(f"Padded audio data with {padding_needed} bytes for alignment")
+            
+            # Create WAV file in memory
+            wav_buffer = io.BytesIO()
+            
+            with wave.open(wav_buffer, 'wb') as wav_file:
+                wav_file.setnchannels(channels)
+                wav_file.setsampwidth(sample_width)
+                wav_file.setframerate(sample_rate)
+                wav_file.writeframes(raw_audio_data)
+            
+            # Get WAV data
+            wav_data = wav_buffer.getvalue()
+            logger.info(f"Successfully converted to WAV: {len(wav_data)} bytes")
+            
+            return wav_data
+            
+        except Exception as e:
+            logger.error(f"Error converting raw PCM to WAV: {str(e)}")
+            return None
+    
+    def _save_debug_audio_files(self, raw_audio_data: bytes, wav_data: bytes, prefix: str = "debug"):
+        """
+        Save audio files for debugging purposes.
+        
+        Args:
+            raw_audio_data: Raw PCM audio data
+            wav_data: WAV formatted audio data
+            prefix: Filename prefix
+        """
+        try:
+            import time
+            timestamp = int(time.time())
+            
+            # Save raw file
+            raw_filename = f"/tmp/{prefix}_{timestamp}.raw"
+            with open(raw_filename, 'wb') as f:
+                f.write(raw_audio_data)
+            logger.info(f"Saved raw audio to: {raw_filename}")
+            
+            # Save WAV file
+            wav_filename = f"/tmp/{prefix}_{timestamp}.wav"
+            with open(wav_filename, 'wb') as f:
+                f.write(wav_data)
+            logger.info(f"Saved WAV audio to: {wav_filename}")
+            
+        except Exception as e:
+            logger.warning(f"Failed to save debug audio files: {e}")
     
     async def text_to_speech(self, text: str, language: str = "en-IN", speaker: str = "meera") -> Optional[str]:
         """

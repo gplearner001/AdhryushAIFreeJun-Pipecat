@@ -9,6 +9,7 @@ import logging
 from typing import Dict, Any, Optional
 import io
 import wave
+import struct
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,51 @@ def convert_sarvam_to_teler_audio(audio_b64: str) -> str:
     except Exception as e:
         logger.error(f"Error converting Sarvam to Teler audio: {e}")
         return audio_b64
+
+def convert_teler_raw_to_wav(audio_b64: str, sample_rate: int = 8000, channels: int = 1, sample_width: int = 2) -> str:
+    """
+    Convert Teler raw PCM audio to WAV format
+    
+    Args:
+        audio_b64: Base64 encoded raw PCM audio from Teler
+        sample_rate: Sample rate in Hz (default: 8000)
+        channels: Number of channels (default: 1 for mono)
+        sample_width: Sample width in bytes (default: 2 for 16-bit)
+        
+    Returns:
+        Base64 encoded WAV audio data
+    """
+    try:
+        # Decode the base64 raw PCM data
+        raw_audio_data = base64.b64decode(audio_b64)
+        logger.info(f"Converting Teler raw PCM to WAV: {len(raw_audio_data)} bytes")
+        
+        # Validate and align data
+        expected_alignment = sample_width * channels
+        if len(raw_audio_data) % expected_alignment != 0:
+            padding_needed = expected_alignment - (len(raw_audio_data) % expected_alignment)
+            raw_audio_data += b'\x00' * padding_needed
+            logger.debug(f"Padded audio data with {padding_needed} bytes")
+        
+        # Create WAV file in memory
+        wav_buffer = io.BytesIO()
+        
+        with wave.open(wav_buffer, 'wb') as wav_file:
+            wav_file.setnchannels(channels)
+            wav_file.setsampwidth(sample_width)
+            wav_file.setframerate(sample_rate)
+            wav_file.writeframes(raw_audio_data)
+        
+        # Get WAV data and encode to base64
+        wav_data = wav_buffer.getvalue()
+        wav_b64 = base64.b64encode(wav_data).decode('utf-8')
+        
+        logger.info(f"Successfully converted to WAV: {len(wav_data)} bytes -> {len(wav_b64)} base64 chars")
+        return wav_b64
+        
+    except Exception as e:
+        logger.error(f"Error converting Teler raw to WAV: {e}")
+        return audio_b64  # Return original if conversion fails
 
 def create_silence_audio(duration_ms: int = 1000, sample_rate: int = 8000) -> str:
     """
