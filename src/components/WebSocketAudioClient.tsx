@@ -67,11 +67,12 @@ export const WebSocketAudioClient: React.FC = () => {
       // Request microphone access with proper constraints
       const stream = await navigator.mediaDevices.getUserMedia({ 
         audio: {
-          sampleRate: 16000, // Higher sample rate for better quality
+          sampleRate: 48000, // High sample rate for better quality before downsampling
           channelCount: 1,
           echoCancellation: true,
           noiseSuppression: true,
-          autoGainControl: true
+          autoGainControl: true,
+          latency: 0.01 // Low latency for real-time processing
         } 
       });
       
@@ -194,21 +195,31 @@ export const WebSocketAudioClient: React.FC = () => {
     try {
       console.log('🎤 Starting recording...');
       
-      // Create MediaRecorder with supported format
-      let mimeType = 'audio/webm;codecs=opus';
+      // Create MediaRecorder with format closest to PCM
+      let mimeType = 'audio/webm;codecs=pcm';
       if (!MediaRecorder.isTypeSupported(mimeType)) {
-        mimeType = 'audio/webm';
+        mimeType = 'audio/webm;codecs=opus';
         if (!MediaRecorder.isTypeSupported(mimeType)) {
-          mimeType = 'audio/mp4';
+          mimeType = 'audio/webm';
           if (!MediaRecorder.isTypeSupported(mimeType)) {
-            mimeType = ''; // Let browser choose
+            mimeType = 'audio/mp4';
+            if (!MediaRecorder.isTypeSupported(mimeType)) {
+              mimeType = ''; // Let browser choose
+            }
           }
         }
       }
       
       console.log('🎵 Using MIME type:', mimeType || 'browser default');
       
-      const options = mimeType ? { mimeType } : {};
+      // Configure MediaRecorder for better audio quality
+      const options: MediaRecorderOptions = mimeType ? { 
+        mimeType,
+        audioBitsPerSecond: 128000 // Higher bitrate for better quality before conversion
+      } : {
+        audioBitsPerSecond: 128000
+      };
+      
       mediaRecorderRef.current = new MediaRecorder(streamRef.current, options);
       
       let audioChunks: Blob[] = [];
@@ -239,17 +250,17 @@ export const WebSocketAudioClient: React.FC = () => {
       };
       
       // Start recording with time slices
-      mediaRecorderRef.current.start(2000); // 2 second chunks
+      mediaRecorderRef.current.start(1000); // 1 second chunks for more responsive streaming
       setIsRecording(true);
       console.log('✅ Recording started successfully');
       
-      // Auto-stop recording after 5 seconds for testing
+      // Auto-stop recording after 3 seconds for testing
       recordingTimeoutRef.current = setTimeout(() => {
         if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-          console.log('⏰ Auto-stopping recording after 5 seconds');
+          console.log('⏰ Auto-stopping recording after 3 seconds');
           stopRecording();
         }
-      }, 5000);
+      }, 3000);
       
     } catch (error) {
       console.error('❌ Failed to start recording:', error);
@@ -337,37 +348,128 @@ export const WebSocketAudioClient: React.FC = () => {
 
   const convertAudioForTeler = async (audioBlob: Blob): Promise<string | null> => {
     try {
-      console.log('🔄 Converting audio blob to base64...');
+      console.log('🔄 Converting audio blob to 16-bit PCM raw data...');
       
-      // Simple conversion to base64
-      return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        
-        reader.onload = () => {
-          try {
-            const result = reader.result as string;
-            // Remove data URL prefix (e.g., "data:audio/webm;base64,")
-            const base64 = result.split(',')[1];
-            console.log('✅ Audio converted to base64, length:', base64.length);
-            resolve(base64);
-          } catch (error) {
-            console.error('❌ Error extracting base64:', error);
-            reject(error);
-          }
-        };
-        
-        reader.onerror = () => {
-          console.error('❌ FileReader error');
-          reject(new Error('FileReader failed'));
-        };
-        
-        reader.readAsDataURL(audioBlob);
+      // Convert WebM/MP4 audio to 16-bit PCM raw data
+      const audioBuffer = await audioBlob.arrayBuffer();
+      
+      // Create audio context for processing
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
+        sampleRate: 8000 // Target sample rate for Teler
       });
+      
+      try {
+        // Decode the audio data
+        const decodedAudioData = await audioContext.decodeAudioData(audioBuffer);
+        console.log('🎵 Decoded audio:', {
+          sampleRate: decodedAudioData.sampleRate,
+          channels: decodedAudioData.numberOfChannels,
+          duration: decodedAudioData.duration,
+          length: decodedAudioData.length
+        });
+        
+        // Get the first channel (mono)
+        const channelData = decodedAudioData.getChannelData(0);
+        
+        // Resample to 8000 Hz if needed
+        const targetSampleRate = 8000;
+        const resampledData = await resampleAudio(channelData, decodedAudioData.sampleRate, targetSampleRate);
+        
+        // Convert float32 samples to 16-bit PCM
+        const pcmData = new Int16Array(resampledData.length);
+        for (let i = 0; i < resampledData.length; i++) {
+          // Clamp to [-1, 1] and convert to 16-bit signed integer
+          const sample = Math.max(-1, Math.min(1, resampledData[i]));
+          pcmData[i] = Math.round(sample * 32767);
+        }
+        
+        console.log('🔄 Converted to 16-bit PCM:', {
+          originalSamples: channelData.length,
+          resampledSamples: resampledData.length,
+          pcmBytes: pcmData.byteLength,
+          sampleRate: targetSampleRate,
+          channels: 1,
+          bitDepth: 16
+        });
+        
+        // Convert to base64
+        const uint8Array = new Uint8Array(pcmData.buffer);
+        const base64 = btoa(String.fromCharCode(...uint8Array));
+        
+        console.log('✅ Audio converted to base64 PCM, length:', base64.length);
+        
+        // Close audio context to free resources
+        await audioContext.close();
+        
+        return base64;
+        
+      } catch (decodeError) {
+        console.error('❌ Error decoding audio:', decodeError);
+        await audioContext.close();
+        
+        // Fallback: try to extract raw audio data directly
+        console.log('🔄 Attempting fallback conversion...');
+        return await fallbackAudioConversion(audioBlob);
+      }
       
     } catch (error) {
       console.error('❌ Error converting audio for Teler:', error);
       return null;
     }
+  };
+
+  const resampleAudio = async (inputData: Float32Array, inputSampleRate: number, outputSampleRate: number): Promise<Float32Array> => {
+    if (inputSampleRate === outputSampleRate) {
+      return inputData;
+    }
+    
+    const ratio = inputSampleRate / outputSampleRate;
+    const outputLength = Math.round(inputData.length / ratio);
+    const outputData = new Float32Array(outputLength);
+    
+    for (let i = 0; i < outputLength; i++) {
+      const inputIndex = i * ratio;
+      const inputIndexFloor = Math.floor(inputIndex);
+      const inputIndexCeil = Math.min(inputIndexFloor + 1, inputData.length - 1);
+      const fraction = inputIndex - inputIndexFloor;
+      
+      // Linear interpolation
+      outputData[i] = inputData[inputIndexFloor] * (1 - fraction) + inputData[inputIndexCeil] * fraction;
+    }
+    
+    console.log('🔄 Resampled audio:', {
+      inputSampleRate,
+      outputSampleRate,
+      inputLength: inputData.length,
+      outputLength: outputData.length,
+      ratio: ratio.toFixed(3)
+    });
+    
+    return outputData;
+  };
+
+  const fallbackAudioConversion = async (audioBlob: Blob): Promise<string> => {
+    console.log('🔄 Using fallback audio conversion...');
+    
+    // Simple fallback: convert blob to base64 directly
+    // This won't be proper PCM but will allow testing
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      
+      reader.onload = () => {
+        try {
+          const result = reader.result as string;
+          const base64 = result.split(',')[1];
+          console.log('⚠️ Fallback conversion complete, length:', base64.length);
+          resolve(base64);
+        } catch (error) {
+          reject(error);
+        }
+      };
+      
+      reader.onerror = () => reject(new Error('FileReader failed'));
+      reader.readAsDataURL(audioBlob);
+    });
   };
 
   const playAudioResponse = async (audioBase64: string) => {
@@ -523,10 +625,11 @@ export const WebSocketAudioClient: React.FC = () => {
           <div className="text-xs text-gray-500 space-y-1">
             <p>🔗 WebSocket: Connected to {WS_URL}</p>
             <p>📡 Stream ID: {currentStreamId}</p>
-            <p>🎤 Microphone: {isRecording ? 'Recording (auto-stops after 5s)' : 'Idle'}</p>
+            <p>🎤 Microphone: {isRecording ? 'Recording → 16-bit PCM @ 8kHz (auto-stops after 3s)' : 'Idle'}</p>
             <p>🔊 Audio: {isPlaying ? 'Playing response' : 'Ready'}</p>
             <p>📊 Message ID: {messageIdCounter}</p>
             <p>📦 Recorded Chunks: {recordedChunks.length}</p>
+            <p>🎵 Format: 16-bit PCM, Mono, 8000 Hz</p>
           </div>
         )}
       </div>
@@ -676,14 +779,16 @@ export const WebSocketAudioClient: React.FC = () => {
         <h3 className="text-sm font-semibold text-blue-800 mb-2">How it works:</h3>
         <ul className="text-xs text-blue-700 space-y-1">
           <li>• Click "Connect & Start Call" to establish WebSocket connection</li>
-          <li>• Recording starts automatically and stops after 5 seconds (for testing)</li>
+          <li>• Recording starts automatically and stops after 3 seconds (for testing)</li>
           <li>• Speak into your microphone during the recording period</li>
-          <li>• Audio is processed and sent to backend in Teler format</li>
+          <li>• Audio is converted to 16-bit PCM raw data (mono, 8kHz) for Teler</li>
+          <li>• PCM data is base64 encoded and sent in Teler WebSocket format</li>
           <li>• Click "Chunks" button to view and play back recorded audio chunks</li>
           <li>• Each chunk can be played individually or downloaded for analysis</li>
           <li>• AI processes your speech and responds with Sarvam AI TTS</li>
           <li>• Response audio is played back through your speakers</li>
           <li>• Manual start/stop recording is also available</li>
+          <li>• Audio format: 16-bit PCM, 1 channel (mono), 8000 Hz sample rate</li>
         </ul>
       </div>
     </div>
