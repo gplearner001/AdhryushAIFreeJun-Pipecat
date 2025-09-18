@@ -15,6 +15,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 from datetime import datetime, timedelta
 from sarvam_service import sarvam_service
 from claude_service import claude_service
+from vad_processor import vad_processor
 
 logger = logging.getLogger(__name__)
 
@@ -214,6 +215,29 @@ class TelerWebSocketHandler:
                 # Clear the buffer
                 self.audio_buffers[connection_id] = []
                 
+                # 🎯 SPEECH DETECTION: Check if combined audio contains speech using WebRTC VAD
+                logger.info(f"🔍 Checking for speech in combined audio using WebRTC VAD...")
+                has_speech = vad_processor.has_speech(combined_audio)
+                
+                if not has_speech:
+                    logger.info(f"🔇 No speech detected in audio chunk, skipping STT processing for {connection_id}")
+                    
+                    # Get VAD statistics for debugging
+                    vad_stats = vad_processor.get_vad_stats(combined_audio)
+                    logger.debug(f"📊 VAD Stats: {vad_stats}")
+                    
+                    return  # Skip STT processing for non-speech audio
+                
+                logger.info(f"🗣️ Speech detected! Proceeding with STT processing for {connection_id}")
+                
+                # Optional: Filter audio to keep only speech segments
+                filtered_audio = vad_processor.filter_speech_audio(combined_audio)
+                if filtered_audio:
+                    logger.info(f"🎯 Using filtered speech-only audio for STT")
+                    combined_audio = filtered_audio
+                else:
+                    logger.info(f"⚠️ Speech filtering returned empty, using original audio")
+                
                 # Process the combined audio
                 transcript = await self._convert_audio_to_text(combined_audio, connection_id)
                 
@@ -242,7 +266,7 @@ class TelerWebSocketHandler:
                     # Reset silence monitoring
                     await self._reset_silence_monitoring(connection_id)
                 else:
-                    logger.debug(f"🔇 No meaningful speech detected in accumulated audio for {connection_id}")
+                    logger.debug(f"🔇 Speech detected but no meaningful transcript generated for {connection_id}")
                     
             except Exception as e:
                 logger.error(f"❌ Error processing accumulated audio: {e}")
@@ -269,18 +293,22 @@ class TelerWebSocketHandler:
     async def _convert_audio_to_text(self, audio_b64: str, connection_id: str) -> Optional[str]:
         """Convert audio to text using Sarvam AI"""
         try:
-            logger.info(f"🎯 Converting audio to text for connection: {connection_id}")
+            logger.info(f"🎯 Converting speech audio to text for connection: {connection_id}")
             logger.debug(f"Audio data length: {len(audio_b64)} base64 characters")
             
+            # Get VAD statistics for logging
+            vad_stats = vad_processor.get_vad_stats(audio_b64)
+            logger.info(f"📊 Final VAD Stats before STT: speech_ratio={vad_stats.get('speech_ratio', 0):.2f}, speech_duration={vad_stats.get('speech_duration_ms', 0)}ms")
+            
             # Convert speech to text using Sarvam AI
-            logger.info("🎯 Converting accumulated speech to text with Sarvam AI...")
+            logger.info("🎯 Converting speech-validated audio to text with Sarvam AI...")
             transcript = await sarvam_service.speech_to_text(audio_b64, language="en-IN")
             
             if transcript and transcript.strip():
                 logger.info(f"📝 STT Result: '{transcript}' (Connection: {connection_id})")
                 return transcript.strip()
             else:
-                logger.info(f"🔇 No speech detected in accumulated audio for {connection_id}")
+                logger.info(f"🔇 STT returned empty result despite speech detection for {connection_id}")
                 return None
                 
         except Exception as e:

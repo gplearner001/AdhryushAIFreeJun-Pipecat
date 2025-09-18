@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 from websocket_handler import websocket_handler
 from claude_service import claude_service
 from sarvam_service import sarvam_service
+from vad_processor import vad_processor
 
 # Teler imports
 try:
@@ -439,6 +440,7 @@ if __name__ == "__main__":
     logger.info(f"  - SARVAM_API_KEY: {'***' + os.getenv('SARVAM_API_KEY', 'NOT_SET')[-4:] if os.getenv('SARVAM_API_KEY') else 'NOT_SET'}")
     logger.info(f"Claude AI available: {claude_service.is_available()}")
     logger.info(f"Sarvam AI available: {sarvam_service.is_available()}")
+    logger.info(f"WebRTC VAD available: {vad_processor is not None}")
     
     uvicorn.run(
         "fastapi_app:app",
