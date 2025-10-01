@@ -154,32 +154,48 @@ class TelerWebSocketHandler:
         if call_state.get('call_ended', False):
             logger.debug(f"🚫 Ignoring audio for ended call: {connection_id}")
             return
-            
+
         stream_id = data.get("stream_id")
         message_id = data.get("message_id")
         audio_b64 = data.get("data", {}).get("audio_b64")
-        
+
         if not audio_b64:
             logger.warning("Received audio message without audio data")
             return
-        
-        logger.debug(f"🎤 Buffering audio chunk {message_id} for stream {stream_id}")
-        
+
+        # Decode to check size
+        audio_data = base64.b64decode(audio_b64)
+        duration_ms = (len(audio_data) / 2) / 8  # 16-bit samples at 8kHz
+
+        logger.debug(f"🎤 Buffering audio chunk {message_id} for stream {stream_id} ({len(audio_data)} bytes, ~{duration_ms:.1f}ms)")
+
         # Add to audio buffer instead of processing immediately
         if connection_id in self.audio_buffers:
             self.audio_buffers[connection_id].append({
                 'audio_b64': audio_b64,
                 'message_id': message_id,
-                'timestamp': datetime.now()
+                'timestamp': datetime.now(),
+                'duration_ms': duration_ms
             })
-        
+
         # Only process if we're waiting for user input and not already processing
-        if (call_state.get('waiting_for_user', True) and 
+        if (call_state.get('waiting_for_user', True) and
             not call_state.get('is_processing', False)):
-            
-            # Start processing after a short delay to accumulate more audio
-            await asyncio.sleep(0.5)  # Wait 500ms to accumulate audio
-            await self._process_accumulated_audio(connection_id, websocket)
+
+            # Check accumulated duration
+            accumulated_duration = sum(chunk.get('duration_ms', 0) for chunk in self.audio_buffers[connection_id])
+
+            # Wait until we have at least 1 second of audio before processing
+            if accumulated_duration >= 1000:  # 1 second minimum
+                logger.info(f"✅ Accumulated {accumulated_duration:.0f}ms of audio, processing now...")
+                await self._process_accumulated_audio(connection_id, websocket)
+            else:
+                # Schedule processing check after a delay if buffer is building up
+                await asyncio.sleep(0.2)  # Check again in 200ms
+                if connection_id in self.audio_buffers:
+                    new_duration = sum(chunk.get('duration_ms', 0) for chunk in self.audio_buffers[connection_id])
+                    if new_duration >= 1000 and not call_state.get('is_processing', False):
+                        await self._process_accumulated_audio(connection_id, websocket)
     
     async def _process_accumulated_audio(self, connection_id: str, websocket: WebSocket):
         """Process accumulated audio chunks"""
@@ -207,34 +223,27 @@ class TelerWebSocketHandler:
                 if not audio_chunks:
                     return
                 
-                logger.info(f"🔄 Processing {len(audio_chunks)} accumulated audio chunks for {connection_id}")
-                
+                # Calculate total duration
+                total_duration_ms = sum(chunk.get('duration_ms', 0) for chunk in audio_chunks)
+                logger.info(f"🔄 Processing {len(audio_chunks)} accumulated audio chunks for {connection_id} (total: {total_duration_ms:.0f}ms)")
+
                 # Combine audio chunks
                 combined_audio = self._combine_audio_chunks(audio_chunks)
-
+                
                 # Clear the buffer
                 self.audio_buffers[connection_id] = []
-
-                # 🎯 AUDIO DIAGNOSTICS: Log audio characteristics
-                logger.info(f"🔍 Analyzing combined audio characteristics...")
-                audio_info = self._analyze_audio_characteristics(combined_audio)
-                logger.info(f"📊 Audio Info: RMS={audio_info.get('rms', 0):.2f}, Peak={audio_info.get('peak', 0)}, Duration={audio_info.get('duration_ms', 0):.1f}ms")
-
+                
                 # 🎯 SPEECH DETECTION: Check if combined audio contains speech using WebRTC VAD
                 logger.info(f"🔍 Checking for speech in combined audio using WebRTC VAD...")
-                has_speech = vad_processor.has_speech(combined_audio, enhance_audio=True)
-
+                has_speech = vad_processor.has_speech(combined_audio)
+                
                 if not has_speech:
                     logger.info(f"🔇 No speech detected in audio chunk, skipping STT processing for {connection_id}")
-
+                    
                     # Get VAD statistics for debugging
                     vad_stats = vad_processor.get_vad_stats(combined_audio)
-                    logger.info(f"📊 VAD Stats: frames={vad_stats.get('total_frames', 0)}, speech_frames={vad_stats.get('speech_frames', 0)}, ratio={vad_stats.get('speech_ratio', 0):.2f}")
-
-                    # Save problematic audio for debugging (optional)
-                    if audio_info.get('rms', 0) > 100:  # If it has some volume but no speech detected
-                        self._save_debug_audio(combined_audio, f"no_speech_{connection_id}")
-
+                    logger.debug(f"📊 VAD Stats: {vad_stats}")
+                    
                     return  # Skip STT processing for non-speech audio
                 
                 logger.info(f"🗣️ Speech detected! Proceeding with STT processing for {connection_id}")
@@ -291,7 +300,19 @@ class TelerWebSocketHandler:
             for chunk in audio_chunks:
                 audio_data = base64.b64decode(chunk['audio_b64'])
                 combined_data += audio_data
-            
+
+            # Calculate audio characteristics for debugging
+            duration_ms = (len(combined_data) / 2) / 8  # 16-bit samples at 8kHz
+
+            # Calculate RMS and peak for audio analysis
+            import struct
+            samples = struct.unpack(f'<{len(combined_data)//2}h', combined_data)
+            rms = (sum(s*s for s in samples) / len(samples)) ** 0.5 if samples else 0
+            peak = max(abs(s) for s in samples) if samples else 0
+
+            logger.info(f"🔍 Analyzing combined audio characteristics...")
+            logger.info(f"📊 Audio Info: RMS={rms:.2f}, Peak={peak}, Duration={duration_ms:.1f}ms")
+
             # Encode back to base64
             return base64.b64encode(combined_data).decode('utf-8')
         except Exception as e:
@@ -691,48 +712,6 @@ class TelerWebSocketHandler:
     def get_active_streams(self) -> Dict[str, Dict[str, Any]]:
         """Get all active stream metadata"""
         return self.stream_metadata.copy()
-
-    def _analyze_audio_characteristics(self, audio_b64: str) -> Dict[str, Any]:
-        """Analyze audio characteristics for debugging"""
-        try:
-            import numpy as np
-            audio_data = base64.b64decode(audio_b64)
-            audio_array = np.frombuffer(audio_data, dtype=np.int16)
-
-            rms = np.sqrt(np.mean(audio_array.astype(np.float32) ** 2))
-            peak = np.max(np.abs(audio_array))
-            duration_ms = (len(audio_array) / 8000) * 1000
-
-            return {
-                'rms': float(rms),
-                'peak': int(peak),
-                'duration_ms': float(duration_ms),
-                'num_samples': len(audio_array)
-            }
-        except Exception as e:
-            logger.error(f"Error analyzing audio: {e}")
-            return {'rms': 0, 'peak': 0, 'duration_ms': 0, 'num_samples': 0}
-
-    def _save_debug_audio(self, audio_b64: str, label: str):
-        """Save audio chunk for debugging"""
-        try:
-            import time
-            import wave
-
-            timestamp = int(time.time())
-            audio_data = base64.b64decode(audio_b64)
-
-            # Save as WAV for easy playback
-            filename = f"/tmp/debug_{label}_{timestamp}.wav"
-            with wave.open(filename, 'wb') as wav_file:
-                wav_file.setnchannels(1)
-                wav_file.setsampwidth(2)
-                wav_file.setframerate(8000)
-                wav_file.writeframes(audio_data)
-
-            logger.info(f"💾 Saved debug audio to: {filename}")
-        except Exception as e:
-            logger.debug(f"Could not save debug audio: {e}")
 
 # Global instance
 websocket_handler = TelerWebSocketHandler()
