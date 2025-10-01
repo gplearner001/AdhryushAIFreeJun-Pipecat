@@ -157,7 +157,7 @@ class ClaudeService:
         context = conversation_context.get('context', {})
 
         # Get language from context
-        language = context.get('language', 'hi-IN')
+        language = context.get('language', 'en-IN')
         language_name = self._get_language_name(language)
 
         history_text = "\n".join([f"{msg['role']}: {msg['content']}" for msg in history])

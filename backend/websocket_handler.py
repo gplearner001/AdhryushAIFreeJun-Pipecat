@@ -53,7 +53,7 @@ class TelerWebSocketHandler:
             'max_silence_warnings': 2,
             'is_processing': False,
             'last_meaningful_speech': None,
-            'current_language': 'hi-IN',
+            'current_language': 'en-IN',
             'detected_language': None
         }
         
@@ -252,7 +252,7 @@ class TelerWebSocketHandler:
                     logger.info(f"⚠️ Speech filtering returned empty, using original audio")
                 
                 # Get current language for this connection
-                current_language = self.call_states.get(connection_id, {}).get('current_language', 'hi-IN')
+                current_language = self.call_states.get(connection_id, {}).get('current_language', 'en-IN')
 
                 # Process the combined audio with language detection
                 stt_result = await self._convert_audio_to_text(combined_audio, connection_id, current_language)
@@ -337,7 +337,7 @@ class TelerWebSocketHandler:
             # Return the first chunk if combination fails
             return audio_chunks[0]['audio_b64'] if audio_chunks else ""
     
-    async def _convert_audio_to_text(self, audio_b64: str, connection_id: str, language: str = "hi-IN") -> Optional[Dict[str, Any]]:
+    async def _convert_audio_to_text(self, audio_b64: str, connection_id: str, language: str = "en-IN") -> Optional[Dict[str, Any]]:
         """Convert audio to text using Sarvam AI"""
         try:
             logger.info(f"🎯 Converting speech audio to text for connection: {connection_id} (language: {language})")
@@ -369,7 +369,7 @@ class TelerWebSocketHandler:
         """Generate AI response and send it back"""
         try:
             # Get current language for this connection
-            current_language = self.call_states.get(connection_id, {}).get('current_language', 'hi-IN')
+            current_language = self.call_states.get(connection_id, {}).get('current_language', 'en-IN')
 
             # Generate AI response using Claude
             logger.info(f"🤖 Generating AI response with Claude (language: {current_language})...")
@@ -429,7 +429,7 @@ class TelerWebSocketHandler:
             self.call_states[connection_id]['waiting_for_user'] = True
 
         # Get current language
-        current_language = self.call_states.get(connection_id, {}).get('current_language', 'hi-IN')
+        current_language = self.call_states.get(connection_id, {}).get('current_language', 'en-IN')
 
         # Greeting text based on language
         if current_language == 'en-IN':
@@ -532,7 +532,7 @@ class TelerWebSocketHandler:
         """Generate AI response using Claude based on user input and conversation history."""
         try:
             # Get current language
-            current_language = self.call_states.get(connection_id, {}).get('current_language', 'hi-IN')
+            current_language = self.call_states.get(connection_id, {}).get('current_language', 'en-IN')
 
             if not claude_service.is_available():
                 # Fallback responses based on language
@@ -571,7 +571,7 @@ class TelerWebSocketHandler:
         except Exception as e:
             logger.error(f"Error generating AI response: {str(e)}")
             # Return fallback based on current language
-            current_language = self.conversation_history.get(connection_id, [{}])[-1].get('language', 'hi-IN') if connection_id in self.conversation_history else 'hi-IN'
+            current_language = self.conversation_history.get(connection_id, [{}])[-1].get('language', 'en-IN') if connection_id in self.conversation_history else 'hi-IN'
             if current_language == 'en-IN':
                 return "I'm glad you spoke."
             return "मुझे खुशी है कि आपने बात की।"  # "I'm glad you spoke."
