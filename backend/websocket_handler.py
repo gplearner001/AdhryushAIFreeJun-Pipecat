@@ -52,7 +52,9 @@ class TelerWebSocketHandler:
             'silence_warnings': 0,
             'max_silence_warnings': 2,
             'is_processing': False,
-            'last_meaningful_speech': None
+            'last_meaningful_speech': None,
+            'current_language': 'hi-IN',
+            'detected_language': None
         }
         
         logger.info(f"WebSocket connected: {connection_id}")
@@ -249,12 +251,34 @@ class TelerWebSocketHandler:
                 else:
                     logger.info(f"⚠️ Speech filtering returned empty, using original audio")
                 
-                # Process the combined audio
-                transcript = await self._convert_audio_to_text(combined_audio, connection_id)
-                
-                if transcript and self._is_meaningful_speech(transcript):
-                    logger.info(f"📝 USER SAID: '{transcript}' (Connection: {connection_id})")
-                    
+                # Get current language for this connection
+                current_language = self.call_states.get(connection_id, {}).get('current_language', 'hi-IN')
+
+                # Process the combined audio with language detection
+                stt_result = await self._convert_audio_to_text(combined_audio, connection_id, current_language)
+
+                if stt_result and stt_result.get('transcript') and self._is_meaningful_speech(stt_result['transcript']):
+                    transcript = stt_result['transcript']
+                    detected_language = stt_result.get('language', current_language)
+                    logger.info(f"📝 USER SAID: '{transcript}' (Language: {detected_language}, Connection: {connection_id})")
+
+                    # Check for language switch request
+                    switch_language = sarvam_service.detect_language_switch_request(transcript)
+                    if switch_language:
+                        logger.info(f"🌐 Language switch requested: {current_language} -> {switch_language}")
+                        if connection_id in self.call_states:
+                            self.call_states[connection_id]['current_language'] = switch_language
+                        await self._send_language_switch_confirmation(connection_id, websocket, switch_language)
+                        return
+
+                    # Detect language from transcript for auto-switching
+                    detected_text_language = await sarvam_service.detect_language_from_text(transcript)
+                    if detected_text_language and detected_text_language != current_language:
+                        logger.info(f"🌐 Auto language switch detected: {current_language} -> {detected_text_language}")
+                        if connection_id in self.call_states:
+                            self.call_states[connection_id]['current_language'] = detected_text_language
+                            self.call_states[connection_id]['detected_language'] = detected_text_language
+
                     # Update call state - user has spoken meaningfully
                     if connection_id in self.call_states:
                         self.call_states[connection_id]['last_user_speech'] = datetime.now()
@@ -313,23 +337,26 @@ class TelerWebSocketHandler:
             # Return the first chunk if combination fails
             return audio_chunks[0]['audio_b64'] if audio_chunks else ""
     
-    async def _convert_audio_to_text(self, audio_b64: str, connection_id: str) -> Optional[str]:
+    async def _convert_audio_to_text(self, audio_b64: str, connection_id: str, language: str = "hi-IN") -> Optional[Dict[str, Any]]:
         """Convert audio to text using Sarvam AI"""
         try:
-            logger.info(f"🎯 Converting speech audio to text for connection: {connection_id}")
+            logger.info(f"🎯 Converting speech audio to text for connection: {connection_id} (language: {language})")
             logger.debug(f"Audio data length: {len(audio_b64)} base64 characters")
-            
+
             # Get VAD statistics for logging
             vad_stats = vad_processor.get_vad_stats(audio_b64)
             logger.info(f"📊 Final VAD Stats before STT: speech_ratio={vad_stats.get('speech_ratio', 0):.2f}, speech_duration={vad_stats.get('speech_duration_ms', 0)}ms")
-            
-            # Convert speech to text using Sarvam AI
-            logger.info("🎯 Converting speech-validated audio to text with Sarvam AI...")
-            transcript = await sarvam_service.speech_to_text(audio_b64, language="en-IN")
-            
-            if transcript and transcript.strip():
-                logger.info(f"📝 STT Result: '{transcript}' (Connection: {connection_id})")
-                return transcript.strip()
+
+            # Convert speech to text using Sarvam AI with specified language
+            logger.info(f"🎯 Converting speech-validated audio to text with Sarvam AI (language: {language})...")
+            stt_result = await sarvam_service.speech_to_text(audio_b64, language=language)
+
+            if stt_result and stt_result.get('transcript') and stt_result['transcript'].strip():
+                logger.info(f"📝 STT Result: '{stt_result['transcript']}' (Language: {stt_result.get('language')}, Connection: {connection_id})")
+                return {
+                    'transcript': stt_result['transcript'].strip(),
+                    'language': stt_result.get('language', language)
+                }
             else:
                 logger.info(f"🔇 STT returned empty result despite speech detection for {connection_id}")
                 return None
@@ -341,27 +368,37 @@ class TelerWebSocketHandler:
     async def _generate_and_send_ai_response(self, user_input: str, connection_id: str, websocket: WebSocket):
         """Generate AI response and send it back"""
         try:
+            # Get current language for this connection
+            current_language = self.call_states.get(connection_id, {}).get('current_language', 'hi-IN')
+
             # Generate AI response using Claude
-            logger.info("🤖 Generating AI response with Claude...")
+            logger.info(f"🤖 Generating AI response with Claude (language: {current_language})...")
             ai_response = await self._generate_ai_response(user_input, connection_id)
-            
+
             if not ai_response:
-                ai_response = "मैं समझ गया। कृपया आगे बताएं।"  # "I understand. Please continue."
-            
-            logger.info(f"💬 AI Response: '{ai_response}'")
-            
+                # Default fallback based on language
+                if current_language == 'en-IN':
+                    ai_response = "I understand. Please continue."
+                else:
+                    ai_response = "मैं समझ गया। कृपया आगे बताएं।"  # Hindi fallback
+
+            logger.info(f"💬 AI Response: '{ai_response}' (Language: {current_language})")
+
             # Add AI response to conversation history
             self.conversation_history[connection_id].append({
                 "role": "assistant",
                 "content": ai_response
             })
-            
-            # Convert AI response to speech using Sarvam AI
-            logger.info("🔊 Converting AI response to speech with Sarvam AI...")
+
+            # Get appropriate speaker for language
+            speaker = self._get_speaker_for_language(current_language)
+
+            # Convert AI response to speech using Sarvam AI with current language
+            logger.info(f"🔊 Converting AI response to speech with Sarvam AI (language: {current_language}, speaker: {speaker})...")
             response_audio = await sarvam_service.text_to_speech(
                 text=ai_response,
-                language="en-IN",
-                speaker="meera"
+                language=current_language,
+                speaker=speaker
             )
             
             if response_audio:
@@ -382,22 +419,32 @@ class TelerWebSocketHandler:
         """Send initial greeting audio to the caller"""
         websocket = self.active_connections.get(connection_id)
         call_state = self.call_states.get(connection_id, {})
-        
+
         if not websocket or call_state.get('greeting_sent', False) or call_state.get('call_ended', False):
             return
-        
+
         # Mark greeting as sent
         if connection_id in self.call_states:
             self.call_states[connection_id]['greeting_sent'] = True
             self.call_states[connection_id]['waiting_for_user'] = True
-        
-        greeting_text = "नमस्ते! मैं आपकी सहायता के लिए यहाँ हूँ। कृपया बताएं कि मैं आपकी कैसे मदद कर सकती हूँ?"
-        
+
+        # Get current language
+        current_language = self.call_states.get(connection_id, {}).get('current_language', 'hi-IN')
+
+        # Greeting text based on language
+        if current_language == 'en-IN':
+            greeting_text = "Hello! I am here to help you. Please tell me how I can assist you?"
+        else:
+            greeting_text = "नमस्ते! मैं आपकी सहायता के लिए यहाँ हूँ। कृपया बताएं कि मैं आपकी कैसे मदद कर सकती हूँ?"
+
+        # Get appropriate speaker
+        speaker = self._get_speaker_for_language(current_language)
+
         # Generate greeting audio using Sarvam AI TTS
         greeting_audio = await sarvam_service.text_to_speech(
             text=greeting_text,
-            language="en-IN",
-            speaker="meera"
+            language=current_language,
+            speaker=speaker
         )
         
         if greeting_audio:
@@ -484,23 +531,34 @@ class TelerWebSocketHandler:
     async def _generate_ai_response(self, user_input: str, connection_id: str) -> Optional[str]:
         """Generate AI response using Claude based on user input and conversation history."""
         try:
+            # Get current language
+            current_language = self.call_states.get(connection_id, {}).get('current_language', 'hi-IN')
+
             if not claude_service.is_available():
-                # Fallback responses in Hindi
-                fallback_responses = [
-                    "धन्यवाद। आप और क्या जानना चाहते हैं?",
-                    "मैं समझ गया। कृपया आगे बताएं।",
-                    "यह दिलचस्प है। और क्या है?",
-                    "अच्छा। आप और क्या कहना चाहते हैं?"
-                ]
+                # Fallback responses based on language
+                if current_language == 'en-IN':
+                    fallback_responses = [
+                        "Thank you. What else would you like to know?",
+                        "I understand. Please continue.",
+                        "That's interesting. What else?",
+                        "Okay. What else would you like to say?"
+                    ]
+                else:
+                    fallback_responses = [
+                        "धन्यवाद। आप और क्या जानना चाहते हैं?",
+                        "मैं समझ गया। कृपया आगे बताएं।",
+                        "यह दिलचस्प है। और क्या है?",
+                        "अच्छा। आप और क्या कहना चाहते हैं?"
+                    ]
                 import random
                 return random.choice(fallback_responses)
-            
+
             conversation_context = {
                 'history': self.conversation_history.get(connection_id, []),
                 'current_input': user_input,
                 'call_id': connection_id,
                 'context': {
-                    'language': 'hindi',
+                    'language': current_language,
                     'mode': 'voice_call',
                     'platform': 'teler',
                     'instruction': 'Keep responses very short (1-2 sentences max). Wait for user to speak. Listen more, talk less.'
@@ -512,6 +570,10 @@ class TelerWebSocketHandler:
             
         except Exception as e:
             logger.error(f"Error generating AI response: {str(e)}")
+            # Return fallback based on current language
+            current_language = self.conversation_history.get(connection_id, [{}])[-1].get('language', 'hi-IN') if connection_id in self.conversation_history else 'hi-IN'
+            if current_language == 'en-IN':
+                return "I'm glad you spoke."
             return "मुझे खुशी है कि आपने बात की।"  # "I'm glad you spoke."
             
     async def _send_audio_response(self, websocket: WebSocket, audio_b64: str):
@@ -581,6 +643,90 @@ class TelerWebSocketHandler:
         except Exception as e:
             logger.error(f"Error in silence monitoring: {e}")
     
+    def _get_speaker_for_language(self, language: str) -> str:
+        """
+        Get appropriate speaker for the given language.
+
+        Args:
+            language: Language code (e.g., 'en-IN', 'hi-IN')
+
+        Returns:
+            Speaker name for Sarvam AI TTS
+        """
+        speaker_map = {
+            'en-IN': 'meera',
+            'hi-IN': 'meera',
+            'bn-IN': 'meera',
+            'gu-IN': 'meera',
+            'kn-IN': 'meera',
+            'ml-IN': 'meera',
+            'mr-IN': 'meera',
+            'or-IN': 'meera',
+            'pa-IN': 'meera',
+            'ta-IN': 'meera',
+            'te-IN': 'meera'
+        }
+        return speaker_map.get(language, 'meera')
+
+    async def _send_language_switch_confirmation(self, connection_id: str, websocket: WebSocket, new_language: str):
+        """
+        Send confirmation message when language is switched.
+
+        Args:
+            connection_id: Connection identifier
+            websocket: WebSocket connection
+            new_language: New language code
+        """
+        try:
+            # Confirmation messages in different languages
+            confirmations = {
+                'en-IN': "I will now speak in English. How can I help you?",
+                'hi-IN': "मैं अब हिंदी में बोलूंगी। मैं आपकी कैसे मदद कर सकती हूं?",
+                'bn-IN': "আমি এখন বাংলায় কথা বলব। আমি আপনাকে কিভাবে সাহায্য করতে পারি?",
+                'gu-IN': "હું હવે ગુજરાતીમાં બોલીશ. હું તમારી કેવી રીતે મદદ કરી શકું?",
+                'kn-IN': "ನಾನು ಈಗ ಕನ್ನಡದಲ್ಲಿ ಮಾತನಾಡುತ್ತೇನೆ. ನಾನು ನಿಮಗೆ ಹೇಗೆ ಸಹಾಯ ಮಾಡಬಹುದು?",
+                'ml-IN': "ഞാൻ ഇപ്പോൾ മലയാളത്തിൽ സംസാരിക്കും. ഞാൻ നിങ്ങളെ എങ്ങനെ സഹായിക്കും?",
+                'mr-IN': "मी आता मराठीत बोलेन. मी तुम्हाला कशी मदत करू शकते?",
+                'or-IN': "ମୁଁ ବର୍ତ୍ତମାନ ଓଡ଼ିଆରେ କହିବି। ମୁଁ ଆପଣଙ୍କୁ କିପରି ସାହାଯ୍ୟ କରିପାରିବି?",
+                'pa-IN': "ਮੈਂ ਹੁਣ ਪੰਜਾਬੀ ਵਿੱਚ ਬੋਲਾਂਗੀ। ਮੈਂ ਤੁਹਾਡੀ ਕਿਵੇਂ ਮਦਦ ਕਰ ਸਕਦੀ ਹਾਂ?",
+                'ta-IN': "நான் இப்போது தமிழில் பேசுவேன். நான் உங்களுக்கு எப்படி உதவ முடியும்?",
+                'te-IN': "నేను ఇప్పుడు తెలుగులో మాట్లాడతాను. నేను మీకు ఎలా సహాయం చేయగలను?"
+            }
+
+            confirmation_text = confirmations.get(new_language, confirmations['en-IN'])
+
+            logger.info(f"🌐 Sending language switch confirmation: {new_language}")
+
+            # Get appropriate speaker
+            speaker = self._get_speaker_for_language(new_language)
+
+            # Generate confirmation audio
+            confirmation_audio = await sarvam_service.text_to_speech(
+                text=confirmation_text,
+                language=new_language,
+                speaker=speaker
+            )
+
+            if confirmation_audio:
+                confirmation_message = {
+                    "type": "audio",
+                    "audio_b64": confirmation_audio,
+                    "chunk_id": self.chunk_counter
+                }
+
+                self.chunk_counter += 1
+
+                await websocket.send_text(json.dumps(confirmation_message))
+                logger.info(f"✅ Sent language switch confirmation to {connection_id}")
+
+                # Update call state
+                if connection_id in self.call_states:
+                    self.call_states[connection_id]['last_ai_response'] = datetime.now()
+                    self.call_states[connection_id]['waiting_for_user'] = True
+
+        except Exception as e:
+            logger.error(f"Failed to send language switch confirmation: {e}")
+
     async def _send_silence_warning(self, connection_id: str, warning_number: int):
         """Send a silence warning to the user"""
         websocket = self.active_connections.get(connection_id)

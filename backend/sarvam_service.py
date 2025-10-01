@@ -36,16 +36,16 @@ class SarvamAIService:
         """Check if Sarvam AI service is available."""
         return self.api_key is not None
     
-    async def speech_to_text(self, audio_base64: str, language: str = "en-IN") -> Optional[str]:
+    async def speech_to_text(self, audio_base64: str, language: str = "en-IN") -> Optional[Dict[str, Any]]:
         """
         Convert speech to text using Sarvam AI STT API.
-        
+
         Args:
             audio_base64: Base64 encoded audio data
             language: Language code (default: en-IN for Hindi)
-            
+
         Returns:
-            Transcribed text or None if failed
+            Dictionary with 'transcript' and 'language' keys, or None if failed
         """
         if not self.is_available():
             logger.warning("Sarvam AI not available for STT")
@@ -95,8 +95,11 @@ class SarvamAIService:
                         if response.status == 200:
                             result = await response.json()
                             transcript = result.get("transcript", "")
-                            logger.info(f"STT successful: '{transcript}'")
-                            return transcript
+                            logger.info(f"STT successful: '{transcript}' (language: {language})")
+                            return {
+                                "transcript": transcript,
+                                "language": language
+                            }
                         else:
                             error_text = await response.text()
                             logger.error(f"Sarvam STT API error {response.status}: {error_text}")
@@ -255,27 +258,124 @@ class SarvamAIService:
             logger.error(f"Error in Sarvam TTS: {str(e)}")
             return None
     
-    async def detect_language(self, audio_base64: str) -> Optional[str]:
+    async def detect_language_from_text(self, text: str) -> Optional[str]:
         """
-        Detect language from audio using Sarvam AI.
-        
+        Detect language from text using Sarvam AI Language Identification API.
+
         Args:
-            audio_base64: Base64 encoded audio data
-            
+            text: Text to detect language from
+
         Returns:
-            Detected language code or None if failed
+            Detected language code (e.g., 'en-IN', 'hi-IN') or None if failed
         """
         if not self.is_available():
-            return "en-IN"  # Default to Hindi
-        
+            return "en-IN"  # Default to English-India
+
         try:
-            # For now, return default language
-            # You can implement language detection if Sarvam AI supports it
-            return "en-IN"
-            
+            logger.info(f"Detecting language from text: '{text[:50]}...'")
+
+            payload = {
+                "input": text
+            }
+
+            headers = {
+                "API-Subscription-Key": self.api_key,
+                "Content-Type": "application/json"
+            }
+
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{self.base_url}/text-lid",
+                    json=payload,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as response:
+
+                    if response.status == 200:
+                        result = await response.json()
+                        language_code = result.get("language_code")
+                        script_code = result.get("script_code")
+
+                        if language_code:
+                            logger.info(f"Detected language: {language_code} (script: {script_code})")
+                            return language_code
+                        else:
+                            logger.warning("No language code in response")
+                            return "en-IN"
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"Language detection API error {response.status}: {error_text}")
+                        return "en-IN"
+
         except Exception as e:
             logger.error(f"Error in language detection: {str(e)}")
             return "en-IN"
+
+    def get_language_map(self) -> Dict[str, str]:
+        """
+        Get mapping of common language keywords to language codes.
+
+        Returns:
+            Dictionary mapping language keywords to Sarvam AI language codes
+        """
+        return {
+            # English keywords
+            "english": "en-IN",
+            "hindi": "hi-IN",
+            "bengali": "bn-IN",
+            "gujarati": "gu-IN",
+            "kannada": "kn-IN",
+            "malayalam": "ml-IN",
+            "marathi": "mr-IN",
+            "odia": "or-IN",
+            "punjabi": "pa-IN",
+            "tamil": "ta-IN",
+            "telugu": "te-IN",
+            # Hindi keywords
+            "अंग्रेजी": "en-IN",
+            "हिंदी": "hi-IN",
+            "बंगाली": "bn-IN",
+            "गुजराती": "gu-IN",
+            "कन्नड़": "kn-IN",
+            "मलयालम": "ml-IN",
+            "मराठी": "mr-IN",
+            "उड़िया": "or-IN",
+            "पंजाबी": "pa-IN",
+            "तमिल": "ta-IN",
+            "तेलुगु": "te-IN"
+        }
+
+    def detect_language_switch_request(self, text: str) -> Optional[str]:
+        """
+        Detect if user is requesting a language switch.
+
+        Args:
+            text: User's transcript
+
+        Returns:
+            Language code if switch detected, None otherwise
+        """
+        text_lower = text.lower().strip()
+
+        # Common language switch patterns
+        switch_patterns = [
+            "switch to", "change to", "speak in", "talk in",
+            "बदलो", "बोलो", "में बोलो"
+        ]
+
+        # Check if text contains switch pattern
+        is_switch_request = any(pattern in text_lower for pattern in switch_patterns)
+
+        if is_switch_request:
+            # Look for language name in text
+            language_map = self.get_language_map()
+
+            for keyword, lang_code in language_map.items():
+                if keyword in text_lower:
+                    logger.info(f"Language switch detected: '{keyword}' -> {lang_code}")
+                    return lang_code
+
+        return None
 
 # Global instance
 sarvam_service = SarvamAIService()

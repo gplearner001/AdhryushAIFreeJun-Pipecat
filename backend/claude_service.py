@@ -155,18 +155,23 @@ class ClaudeService:
         history = conversation_context.get('history', [])
         current_input = conversation_context.get('current_input', '')
         context = conversation_context.get('context', {})
-        
+
+        # Get language from context
+        language = context.get('language', 'hi-IN')
+        language_name = self._get_language_name(language)
+
         history_text = "\n".join([f"{msg['role']}: {msg['content']}" for msg in history])
-        
+
         return f"""
-        You are an AI assistant in a voice call conversation in Hindi/English mixed language.
-        
+        You are an AI assistant in a voice call conversation in {language_name}.
+
         IMPORTANT CONVERSATION RULES:
         1. Keep responses SHORT (1-2 sentences maximum)
-        2. Respond naturally and conversationally in Hindi/English mix
+        2. Respond naturally and conversationally in {language_name}
         3. DO NOT ask multiple questions in one response
         4. Wait for the user to speak - don't dominate the conversation
         5. Be helpful but concise
+        6. ALWAYS respond in {language_name} language
         6. If user says something brief or unclear, ask ONE clarifying question
         7. Don't repeat the same type of response multiple times
         
@@ -275,6 +280,31 @@ class ClaudeService:
                 "auto_gain_control": True
             }
         }
+
+    def _get_language_name(self, language_code: str) -> str:
+        """
+        Get human-readable language name from language code.
+
+        Args:
+            language_code: Language code (e.g., 'en-IN', 'hi-IN')
+
+        Returns:
+            Human-readable language name
+        """
+        language_names = {
+            'en-IN': 'English',
+            'hi-IN': 'Hindi',
+            'bn-IN': 'Bengali',
+            'gu-IN': 'Gujarati',
+            'kn-IN': 'Kannada',
+            'ml-IN': 'Malayalam',
+            'mr-IN': 'Marathi',
+            'or-IN': 'Odia',
+            'pa-IN': 'Punjabi',
+            'ta-IN': 'Tamil',
+            'te-IN': 'Telugu'
+        }
+        return language_names.get(language_code, 'Hindi/English mixed')
 
 # Global instance
 claude_service = ClaudeService()
