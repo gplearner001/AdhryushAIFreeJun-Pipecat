@@ -211,21 +211,30 @@ class TelerWebSocketHandler:
                 
                 # Combine audio chunks
                 combined_audio = self._combine_audio_chunks(audio_chunks)
-                
+
                 # Clear the buffer
                 self.audio_buffers[connection_id] = []
-                
+
+                # 🎯 AUDIO DIAGNOSTICS: Log audio characteristics
+                logger.info(f"🔍 Analyzing combined audio characteristics...")
+                audio_info = self._analyze_audio_characteristics(combined_audio)
+                logger.info(f"📊 Audio Info: RMS={audio_info.get('rms', 0):.2f}, Peak={audio_info.get('peak', 0)}, Duration={audio_info.get('duration_ms', 0):.1f}ms")
+
                 # 🎯 SPEECH DETECTION: Check if combined audio contains speech using WebRTC VAD
                 logger.info(f"🔍 Checking for speech in combined audio using WebRTC VAD...")
-                has_speech = vad_processor.has_speech(combined_audio)
-                
+                has_speech = vad_processor.has_speech(combined_audio, enhance_audio=True)
+
                 if not has_speech:
                     logger.info(f"🔇 No speech detected in audio chunk, skipping STT processing for {connection_id}")
-                    
+
                     # Get VAD statistics for debugging
                     vad_stats = vad_processor.get_vad_stats(combined_audio)
-                    logger.debug(f"📊 VAD Stats: {vad_stats}")
-                    
+                    logger.info(f"📊 VAD Stats: frames={vad_stats.get('total_frames', 0)}, speech_frames={vad_stats.get('speech_frames', 0)}, ratio={vad_stats.get('speech_ratio', 0):.2f}")
+
+                    # Save problematic audio for debugging (optional)
+                    if audio_info.get('rms', 0) > 100:  # If it has some volume but no speech detected
+                        self._save_debug_audio(combined_audio, f"no_speech_{connection_id}")
+
                     return  # Skip STT processing for non-speech audio
                 
                 logger.info(f"🗣️ Speech detected! Proceeding with STT processing for {connection_id}")
@@ -682,6 +691,48 @@ class TelerWebSocketHandler:
     def get_active_streams(self) -> Dict[str, Dict[str, Any]]:
         """Get all active stream metadata"""
         return self.stream_metadata.copy()
+
+    def _analyze_audio_characteristics(self, audio_b64: str) -> Dict[str, Any]:
+        """Analyze audio characteristics for debugging"""
+        try:
+            import numpy as np
+            audio_data = base64.b64decode(audio_b64)
+            audio_array = np.frombuffer(audio_data, dtype=np.int16)
+
+            rms = np.sqrt(np.mean(audio_array.astype(np.float32) ** 2))
+            peak = np.max(np.abs(audio_array))
+            duration_ms = (len(audio_array) / 8000) * 1000
+
+            return {
+                'rms': float(rms),
+                'peak': int(peak),
+                'duration_ms': float(duration_ms),
+                'num_samples': len(audio_array)
+            }
+        except Exception as e:
+            logger.error(f"Error analyzing audio: {e}")
+            return {'rms': 0, 'peak': 0, 'duration_ms': 0, 'num_samples': 0}
+
+    def _save_debug_audio(self, audio_b64: str, label: str):
+        """Save audio chunk for debugging"""
+        try:
+            import time
+            import wave
+
+            timestamp = int(time.time())
+            audio_data = base64.b64decode(audio_b64)
+
+            # Save as WAV for easy playback
+            filename = f"/tmp/debug_{label}_{timestamp}.wav"
+            with wave.open(filename, 'wb') as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(8000)
+                wav_file.writeframes(audio_data)
+
+            logger.info(f"💾 Saved debug audio to: {filename}")
+        except Exception as e:
+            logger.debug(f"Could not save debug audio: {e}")
 
 # Global instance
 websocket_handler = TelerWebSocketHandler()
