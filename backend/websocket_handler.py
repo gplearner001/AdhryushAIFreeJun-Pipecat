@@ -185,17 +185,10 @@ class TelerWebSocketHandler:
             # Check accumulated duration
             accumulated_duration = sum(chunk.get('duration_ms', 0) for chunk in self.audio_buffers[connection_id])
 
-            # Wait until we have at least 1 second of audio before processing
-            if accumulated_duration >= 1000:  # 1 second minimum
+            # Wait until we have at least 3 seconds of audio before processing
+            if accumulated_duration >= 3000:  # 3 second minimum
                 logger.info(f"✅ Accumulated {accumulated_duration:.0f}ms of audio, processing now...")
                 await self._process_accumulated_audio(connection_id, websocket)
-            else:
-                # Schedule processing check after a delay if buffer is building up
-                await asyncio.sleep(0.2)  # Check again in 200ms
-                if connection_id in self.audio_buffers:
-                    new_duration = sum(chunk.get('duration_ms', 0) for chunk in self.audio_buffers[connection_id])
-                    if new_duration >= 1000 and not call_state.get('is_processing', False):
-                        await self._process_accumulated_audio(connection_id, websocket)
     
     async def _process_accumulated_audio(self, connection_id: str, websocket: WebSocket):
         """Process accumulated audio chunks"""
