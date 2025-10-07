@@ -8,6 +8,7 @@ class ApiService {
       const response = await fetch(`${API_BASE_URL}${endpoint}`, {
         headers: {
           'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': 'true',
           ...options?.headers,
         },
         ...options,
@@ -54,6 +55,7 @@ class ApiService {
     current_input: string;
     call_id?: string;
     context?: any;
+    knowledge_base_id?: string;
   }): Promise<ApiResponse<{ response: string; timestamp: string }>> {
     return this.request<{ response: string; timestamp: string }>('/api/ai/conversation', {
       method: 'POST',

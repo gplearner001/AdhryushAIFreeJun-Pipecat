@@ -6,12 +6,18 @@ import { StatusIndicator } from './components/StatusIndicator';
 import { AIStatusIndicator } from './components/AIStatusIndicator';
 import { AIConversationPanel } from './components/AIConversationPanel';
 import { WebSocketAudioClient } from './components/WebSocketAudioClient';
+import { KnowledgeBaseManager } from './components/KnowledgeBaseManager';
 
 function App() {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [selectedKnowledgeBaseId, setSelectedKnowledgeBaseId] = useState('');
 
   const handleCallInitiated = () => {
     setRefreshTrigger(prev => prev + 1);
+  };
+
+  const handleKnowledgeBaseChange = (kbId: string) => {
+    setSelectedKnowledgeBaseId(kbId);
   };
 
   return (
@@ -28,21 +34,35 @@ function App() {
         
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
           <div>
-            <CallForm onCallInitiated={handleCallInitiated} />
+            <CallForm
+              onCallInitiated={handleCallInitiated}
+              selectedKnowledgeBaseId={selectedKnowledgeBaseId}
+              onKnowledgeBaseChange={handleKnowledgeBaseChange}
+            />
           </div>
-          
+
           <div>
-            <WebSocketAudioClient />
+            <WebSocketAudioClient
+              selectedKnowledgeBaseId={selectedKnowledgeBaseId}
+              onKnowledgeBaseChange={handleKnowledgeBaseChange}
+            />
           </div>
+        </div>
+
+        <div className="mb-8">
+          <KnowledgeBaseManager />
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           <div>
             <CallHistory refreshTrigger={refreshTrigger} />
           </div>
-          
+
           <div>
-            <AIConversationPanel />
+            <AIConversationPanel
+              selectedKnowledgeBaseId={selectedKnowledgeBaseId}
+              onKnowledgeBaseChange={handleKnowledgeBaseChange}
+            />
           </div>
         </div>
 

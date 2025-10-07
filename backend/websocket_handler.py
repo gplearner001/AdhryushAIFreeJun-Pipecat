@@ -54,7 +54,8 @@ class TelerWebSocketHandler:
             'is_processing': False,
             'last_meaningful_speech': None,
             'current_language': 'en-IN',
-            'detected_language': None
+            'detected_language': None,
+            'knowledge_base_id': None
         }
         
         logger.info(f"WebSocket connected: {connection_id}")
@@ -123,24 +124,32 @@ class TelerWebSocketHandler:
     async def _handle_start_message(self, data: Dict[str, Any], connection_id: str):
         """Handle start message with stream metadata"""
         logger.info(f"Stream started for connection {connection_id}")
-        
+
+        call_id = data.get("call_id")
+
         # Store stream metadata
         self.stream_metadata[connection_id] = {
             "account_id": data.get("account_id"),
             "call_app_id": data.get("call_app_id"),
-            "call_id": data.get("call_id"),
+            "call_id": call_id,
             "stream_id": data.get("stream_id"),
             "encoding": data.get("data", {}).get("encoding", "audio/l16"),
             "sample_rate": data.get("data", {}).get("sample_rate", 8000),
             "channels": data.get("data", {}).get("channels", 1),
             "started_at": datetime.now().isoformat()
         }
-        
+
         logger.info(f"Stream metadata: {self.stream_metadata[connection_id]}")
-        
+
+        # Look up knowledge base ID from call history
+        knowledge_base_id = self._get_knowledge_base_for_call(call_id)
+        if knowledge_base_id:
+            logger.info(f"Knowledge base {knowledge_base_id} associated with call {call_id}")
+
         # Update call state
         if connection_id in self.call_states:
             self.call_states[connection_id]['status'] = 'active'
+            self.call_states[connection_id]['knowledge_base_id'] = knowledge_base_id
         
         # Send initial greeting after a short delay
         await asyncio.sleep(1)  # Give time for connection to stabilize
@@ -553,10 +562,15 @@ class TelerWebSocketHandler:
                 import random
                 return random.choice(fallback_responses)
 
+            # Get knowledge base ID for this call
+            knowledge_base_id = self.call_states.get(connection_id, {}).get('knowledge_base_id')
+            logger.info(f"Using knowledge base ID: {knowledge_base_id} for AI response")
+
             conversation_context = {
                 'history': self.conversation_history.get(connection_id, []),
                 'current_input': user_input,
                 'call_id': connection_id,
+                'knowledge_base_id': knowledge_base_id,
                 'context': {
                     'language': current_language,
                     'mode': 'voice_call',
@@ -851,6 +865,30 @@ class TelerWebSocketHandler:
     def get_active_streams(self) -> Dict[str, Dict[str, Any]]:
         """Get all active stream metadata"""
         return self.stream_metadata.copy()
+
+    def _get_knowledge_base_for_call(self, call_id: str) -> Optional[str]:
+        """Look up knowledge base ID associated with a call"""
+        try:
+            from fastapi_app import call_history
+            logger.info(f"Looking up knowledge base for call_id: {call_id}")
+            logger.info(f"Call history has {len(call_history)} entries")
+
+            for call in call_history:
+                logger.debug(f"Checking call: {call.get('call_id')} (KB: {call.get('knowledge_base_id')})")
+                if call.get('call_id') == call_id:
+                    kb_id = call.get('knowledge_base_id')
+                    if kb_id:
+                        logger.info(f"✓ Found knowledge base {kb_id} for call {call_id}")
+                        return kb_id
+                    else:
+                        logger.info(f"Call {call_id} found but no knowledge base associated")
+                        return None
+
+            logger.warning(f"No matching call found in history for call_id: {call_id}")
+            return None
+        except Exception as e:
+            logger.error(f"Error looking up knowledge base for call: {e}")
+            return None
 
 # Global instance
 websocket_handler = TelerWebSocketHandler()

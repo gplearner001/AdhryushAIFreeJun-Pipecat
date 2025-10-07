@@ -2,25 +2,34 @@ import React, { useState } from 'react';
 import { Phone, Send, Loader2, AlertCircle, CheckCircle } from 'lucide-react';
 import { CallRequest } from '../types';
 import { apiService } from '../services/api';
+import { KnowledgeBaseSelector } from './KnowledgeBaseSelector';
 
 interface CallFormProps {
   onCallInitiated: () => void;
+  selectedKnowledgeBaseId: string;
+  onKnowledgeBaseChange: (kbId: string) => void;
 }
 
-export const CallForm: React.FC<CallFormProps> = ({ onCallInitiated }) => {
+export const CallForm: React.FC<CallFormProps> = ({
+  onCallInitiated,
+  selectedKnowledgeBaseId,
+  onKnowledgeBaseChange
+}) => {
   const [formData, setFormData] = useState<CallRequest>({
     from_number: '+918065193776',
     to_number: '+916360154904',
     flow_url: `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/flow`,
     status_callback_url: '',
+    knowledge_base_id: '',
   });
   const [isLoading, setIsLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    const value = e.target.value;
     setFormData({
       ...formData,
-      [e.target.name]: e.target.value,
+      [e.target.name]: value === '' ? undefined : value,
     });
   };
 
@@ -30,7 +39,11 @@ export const CallForm: React.FC<CallFormProps> = ({ onCallInitiated }) => {
     setMessage(null);
 
     try {
-      const response = await apiService.initiateCall(formData);
+      const callData = {
+        ...formData,
+        knowledge_base_id: selectedKnowledgeBaseId || undefined
+      };
+      const response = await apiService.initiateCall(callData);
       setMessage({
         type: 'success',
         text: `Call initiated successfully! Call ID: ${response.data.call_id}`,
@@ -121,6 +134,13 @@ export const CallForm: React.FC<CallFormProps> = ({ onCallInitiated }) => {
             placeholder="https://your-callback-url.com (optional - will auto-generate webhook URL)"
           />
         </div>
+
+        <KnowledgeBaseSelector
+          selectedKbId={selectedKnowledgeBaseId}
+          onSelectKb={onKnowledgeBaseChange}
+          label="Knowledge Base (optional)"
+          showActiveIndicator={false}
+        />
 
         {message && (
           <div className={`flex items-center gap-2 p-4 rounded-lg ${

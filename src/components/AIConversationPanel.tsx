@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { MessageSquare, Send, Loader2, Brain } from 'lucide-react';
 import { apiService } from '../services/api';
+import { KnowledgeBaseSelector } from './KnowledgeBaseSelector';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -8,7 +9,15 @@ interface Message {
   timestamp: string;
 }
 
-export const AIConversationPanel: React.FC = () => {
+interface AIConversationPanelProps {
+  selectedKnowledgeBaseId: string;
+  onKnowledgeBaseChange: (kbId: string) => void;
+}
+
+export const AIConversationPanel: React.FC<AIConversationPanelProps> = ({
+  selectedKnowledgeBaseId,
+  onKnowledgeBaseChange
+}) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -27,11 +36,17 @@ export const AIConversationPanel: React.FC = () => {
     setIsLoading(true);
 
     try {
-      const response = await apiService.generateAIResponse({
+      const requestData: any = {
         history: messages.map(msg => ({ role: msg.role, content: msg.content })),
         current_input: inputText,
         context: { source: 'conversation_panel' }
-      });
+      };
+
+      if (selectedKnowledgeBaseId && selectedKnowledgeBaseId.trim() !== '') {
+        requestData.knowledge_base_id = selectedKnowledgeBaseId;
+      }
+
+      const response = await apiService.generateAIResponse(requestData);
 
       const aiMessage: Message = {
         role: 'assistant',
@@ -62,12 +77,21 @@ export const AIConversationPanel: React.FC = () => {
 
   return (
     <div className="bg-white rounded-xl shadow-lg border border-gray-100 h-96 flex flex-col">
-      <div className="flex items-center gap-3 p-4 border-b border-gray-200">
-        <div className="bg-gradient-to-r from-purple-500 to-pink-600 p-2 rounded-lg">
-          <Brain className="w-5 h-5 text-white" />
+      <div className="p-4 border-b border-gray-200">
+        <div className="flex items-center gap-3 mb-3">
+          <div className="bg-gradient-to-r from-purple-500 to-pink-600 p-2 rounded-lg">
+            <Brain className="w-5 h-5 text-white" />
+          </div>
+          <h3 className="text-lg font-semibold text-gray-800">AI Conversation</h3>
+          <span className="text-sm text-gray-500">Powered by Claude</span>
         </div>
-        <h3 className="text-lg font-semibold text-gray-800">AI Conversation</h3>
-        <span className="text-sm text-gray-500">Powered by Claude</span>
+
+        <KnowledgeBaseSelector
+          selectedKbId={selectedKnowledgeBaseId}
+          onSelectKb={onKnowledgeBaseChange}
+          label="Knowledge Base (optional)"
+          showActiveIndicator={true}
+        />
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -75,7 +99,11 @@ export const AIConversationPanel: React.FC = () => {
           <div className="text-center text-gray-500 py-8">
             <MessageSquare className="w-12 h-12 mx-auto mb-4 text-gray-300" />
             <p>Start a conversation with Claude AI</p>
-            <p className="text-sm text-gray-400 mt-1">Ask questions about call flows, voice interactions, or anything else!</p>
+            <p className="text-sm text-gray-400 mt-1">
+              {selectedKnowledgeBaseId
+                ? 'Ask questions based on your knowledge base documents'
+                : 'Ask questions about call flows, voice interactions, or anything else!'}
+            </p>
           </div>
         ) : (
           messages.map((message, index) => (

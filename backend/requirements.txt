@@ -9,3 +9,13 @@ anthropic
 pydub
 webrtcvad
 numpy
+psycopg2-binary
+pgvector
+voyageai
+python-multipart
+PyPDF2
+python-docx
+openpyxl
+langchain
+langchain-community
+tiktoken

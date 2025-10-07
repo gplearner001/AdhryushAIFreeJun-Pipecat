@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Mic, MicOff, Phone, PhoneOff, Volume2, VolumeX, Radio, Play, Pause, Trash2, Download } from 'lucide-react';
+import { KnowledgeBaseSelector } from './KnowledgeBaseSelector';
 
 interface AudioMessage {
   type: 'audio';
@@ -34,13 +35,22 @@ interface StartMessage {
   };
 }
 
-export const WebSocketAudioClient: React.FC = () => {
+interface WebSocketAudioClientProps {
+  selectedKnowledgeBaseId: string;
+  onKnowledgeBaseChange: (kbId: string) => void;
+}
+
+export const WebSocketAudioClient: React.FC<WebSocketAudioClientProps> = ({
+  selectedKnowledgeBaseId,
+  onKnowledgeBaseChange
+}) => {
   const [isConnected, setIsConnected] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<string>('Disconnected');
   const [streamInfo, setStreamInfo] = useState<any>(null);
   const [currentStreamId, setCurrentStreamId] = useState<string>('');
+  const [currentCallId, setCurrentCallId] = useState<string>('');
   const [messageIdCounter, setMessageIdCounter] = useState<number>(1);
   const [recordedChunks, setRecordedChunks] = useState<RecordedChunk[]>([]);
   const [showChunksList, setShowChunksList] = useState(false);
@@ -52,7 +62,7 @@ export const WebSocketAudioClient: React.FC = () => {
   const playingAudioRef = useRef<HTMLAudioElement | null>(null);
   const recordingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  const WS_URL = `${import.meta.env.VITE_API_URL?.replace('http', 'wss') || 'wss://bfd1cf0ba3ee.ngrok-free.app'}/media-stream`;
+  const WS_URL = `${import.meta.env.VITE_API_URL?.replace('http', 'wss') || 'wss://localhost:5000'}/media-stream`;
 
   useEffect(() => {
     return () => {
@@ -82,17 +92,44 @@ export const WebSocketAudioClient: React.FC = () => {
       // Create WebSocket connection
       wsRef.current = new WebSocket(WS_URL);
       
-      wsRef.current.onopen = () => {
+      wsRef.current.onopen = async () => {
         console.log('🔗 WebSocket connected to:', WS_URL);
         setIsConnected(true);
         setConnectionStatus('Connected');
-        
+
+        const callId = `call_${Date.now()}`;
+        setCurrentCallId(callId);
+
+        // If a knowledge base is selected, associate it with this call FIRST
+        if (selectedKnowledgeBaseId) {
+          try {
+            const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://36eb2f5e8351.ngrok-free.app';
+            const response = await fetch(`${API_BASE_URL}/api/calls/associate-kb`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'ngrok-skip-browser-warning': 'true'
+              },
+              body: JSON.stringify({
+                call_id: callId,
+                knowledge_base_id: selectedKnowledgeBaseId
+              })
+            });
+            const result = await response.json();
+            console.log('✅ Associated knowledge base with call:', selectedKnowledgeBaseId, result);
+            // Small delay to ensure backend has processed the association
+            await new Promise(resolve => setTimeout(resolve, 100));
+          } catch (error) {
+            console.error('❌ Failed to associate knowledge base:', error);
+          }
+        }
+
         // Send start message to simulate Teler's start message
         const startMessage: StartMessage = {
           type: 'start',
           account_id: 'test-account-id',
           call_app_id: 'test-app-id',
-          call_id: `call_${Date.now()}`,
+          call_id: callId,
           stream_id: `stream_${Date.now()}`,
           message_id: 1,
           data: {
@@ -101,13 +138,13 @@ export const WebSocketAudioClient: React.FC = () => {
             channels: 1
           }
         };
-        
+
         // Store the stream ID for audio messages
         setCurrentStreamId(startMessage.stream_id);
         setMessageIdCounter(2); // Start from 2 since start message is 1
-        
+
         wsRef.current?.send(JSON.stringify(startMessage));
-        console.log('📤 Sent start message:', startMessage);
+        console.log('📤 Sent start message with call_id:', callId);
         
         // Start recording after connection
         setTimeout(() => {
@@ -183,6 +220,7 @@ export const WebSocketAudioClient: React.FC = () => {
     setIsRecording(false);
     setConnectionStatus('Disconnected');
     setCurrentStreamId('');
+    setCurrentCallId('');
     setMessageIdCounter(1);
   };
 
@@ -610,6 +648,18 @@ export const WebSocketAudioClient: React.FC = () => {
         </div>
       </div>
 
+      {/* Knowledge Base Selection */}
+      {!isConnected && (
+        <div className="mb-4">
+          <KnowledgeBaseSelector
+            selectedKbId={selectedKnowledgeBaseId}
+            onSelectKb={onKnowledgeBaseChange}
+            label="Knowledge Base (optional)"
+            showActiveIndicator={false}
+          />
+        </div>
+      )}
+
       {/* Connection Status */}
       <div className="mb-6 p-4 bg-gray-50 rounded-lg">
         <div className="flex items-center justify-between mb-2">
@@ -620,6 +670,7 @@ export const WebSocketAudioClient: React.FC = () => {
             {connectionStatus}
           </span>
         </div>
+
         
         {isConnected && (
           <div className="text-xs text-gray-500 space-y-1">

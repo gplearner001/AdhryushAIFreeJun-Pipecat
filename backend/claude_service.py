@@ -90,19 +90,42 @@ class ClaudeService:
     async def generate_conversation_response(self, conversation_context: Dict[str, Any]) -> str:
         """
         Generate a conversation response using Claude.
-        
+
         Args:
             conversation_context: Dictionary containing conversation history and context
-            
+
         Returns:
             Generated response text
         """
         if not self.is_available():
             return "Hello! How can I help you today?"
-        
+
         try:
-            prompt = self._build_conversation_prompt(conversation_context)
-            
+            from rag_service import rag_service
+
+            knowledge_base_context = ""
+            knowledge_base_id = conversation_context.get('knowledge_base_id')
+            current_input = conversation_context.get('current_input', '')
+
+            logger.info(f"🔍 KB Lookup - ID: {knowledge_base_id}, Query: '{current_input}', RAG Available: {rag_service.is_available()}")
+
+            if knowledge_base_id and current_input and rag_service.is_available():
+                logger.info(f"📚 Querying knowledge base: {knowledge_base_id} with query: '{current_input}'")
+                knowledge_base_context = await rag_service.get_context_for_query(
+                    query=current_input,
+                    knowledge_base_id=knowledge_base_id,
+                    max_tokens=2000
+                )
+                logger.info(f"✓ Retrieved context length: {len(knowledge_base_context)} chars")
+                if knowledge_base_context:
+                    logger.info(f"📝 Context preview: {knowledge_base_context[:200]}...")
+                else:
+                    logger.warning("⚠️ Knowledge base returned empty context")
+            else:
+                logger.warning(f"⚠️ Skipping KB query - ID: {knowledge_base_id}, Query: {bool(current_input)}, RAG: {rag_service.is_available()}")
+
+            prompt = self._build_conversation_prompt(conversation_context, knowledge_base_context)
+
             response = self.client.messages.create(
                 model="claude-3-5-sonnet-20241022",
                 max_tokens=500,
@@ -114,9 +137,9 @@ class ClaudeService:
                     }
                 ]
             )
-            
+
             return response.content[0].text.strip()
-            
+
         except Exception as e:
             logger.error(f"Error generating conversation response with Claude: {str(e)}")
             return "I apologize, but I'm having trouble processing your request right now."
@@ -150,17 +173,37 @@ class ClaudeService:
         Focus on enabling REAL PHONE CONVERSATION, not automated responses.
         """
     
-    def _build_conversation_prompt(self, conversation_context: Dict[str, Any]) -> str:
+    def _build_conversation_prompt(self, conversation_context: Dict[str, Any], knowledge_base_context: str = "") -> str:
         """Build prompt for conversation response generation."""
         history = conversation_context.get('history', [])
         current_input = conversation_context.get('current_input', '')
         context = conversation_context.get('context', {})
 
-        # Get language from context
         language = context.get('language', 'en-IN')
         language_name = self._get_language_name(language)
 
         history_text = "\n".join([f"{msg['role']}: {msg['content']}" for msg in history])
+
+        kb_instructions = ""
+        if knowledge_base_context:
+            kb_instructions = f"""
+
+        CRITICAL - KNOWLEDGE BASE CONTEXT:
+        You MUST use the following information from the knowledge base to answer questions.
+        This is the PRIMARY source of truth for all responses.
+
+        --- KNOWLEDGE BASE START ---
+        {knowledge_base_context}
+        --- KNOWLEDGE BASE END ---
+
+        MANDATORY RULES:
+        1. ALWAYS prioritize information from the knowledge base above
+        2. Answer questions ONLY using the knowledge base context provided
+        3. If the exact answer is not in the context, say: "I don't have that specific information in my knowledge base."
+        4. DO NOT use general knowledge or assumptions - ONLY use the knowledge base content
+        5. Be direct and specific - cite relevant information from the knowledge base
+        6. Keep responses SHORT (1-2 sentences) but accurate
+        """
 
         return f"""
         You are an AI assistant in a voice call conversation in {language_name}.
@@ -172,14 +215,15 @@ class ClaudeService:
         4. Wait for the user to speak - don't dominate the conversation
         5. Be helpful but concise
         6. ALWAYS respond in {language_name} language
-        6. If user says something brief or unclear, ask ONE clarifying question
-        7. Don't repeat the same type of response multiple times
-        
+        7. If user says something brief or unclear, ask ONE clarifying question
+        8. Don't repeat the same type of response multiple times
+        {kb_instructions}
+
         Conversation history:
         {history_text}
-        
+
         Current user input: {current_input}
-        
+
         Provide a SHORT, helpful response that continues the conversation naturally.
         Remember: This is a voice call - keep it brief and conversational!
         """

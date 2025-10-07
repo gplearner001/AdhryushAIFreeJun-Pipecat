@@ -192,25 +192,38 @@ class SarvamAIService:
         except Exception as e:
             logger.warning(f"Failed to save debug audio files: {e}")
     
-    async def text_to_speech(self, text: str, language: str = "en-IN", speaker: str = "meera") -> Optional[str]:
+    async def text_to_speech(self, text: str, language: str = "en-IN", speaker: str = "anushka") -> Optional[str]:
         """
         Convert text to speech using Sarvam AI TTS API.
-        
+
         Args:
             text: Text to convert to speech
             language: Language code (default: en-IN for Hindi)
-            speaker: Speaker voice (default: meera)
-            
+            speaker: Speaker voice (default: anushka)
+
         Returns:
             Base64 encoded audio data or None if failed
         """
         if not self.is_available():
             logger.warning("Sarvam AI not available for TTS")
             return None
-        
+
         try:
             logger.info(f"Converting text to speech using Sarvam AI: '{text}' (language: {language}, speaker: {speaker})")
-            
+
+            # Valid speakers according to Sarvam API
+            valid_speakers = [
+                'anushka', 'abhilash', 'manisha', 'vidya', 'arya', 'karun', 'hitesh', 'aditya',
+                'isha', 'ritu', 'chirag', 'harsh', 'sakshi', 'priya', 'neha', 'rahul', 'pooja',
+                'rohan', 'simran', 'kavya', 'anushka', 'sneha', 'kiran', 'vikram', 'rajesh',
+                'sunita', 'tara', 'anirudh', 'kriti', 'ishaan'
+            ]
+
+            # Use default valid speaker if provided speaker is invalid
+            if speaker not in valid_speakers:
+                logger.warning(f"Invalid speaker '{speaker}', using default 'anushka' -> 'anushka'")
+                speaker = 'anushka'
+
             # Prepare the request payload
             payload = {
                 "inputs": [text],
@@ -221,7 +234,7 @@ class SarvamAIService:
                 "loudness": 1.0,
                 "speech_sample_rate": 8000,
                 "enable_preprocessing": True,
-                "model": "bulbul:v1"
+                "model": "bulbul:v2"
             }
             
             headers = {

@@ -20,6 +20,8 @@ from websocket_handler import websocket_handler
 from claude_service import claude_service
 from sarvam_service import sarvam_service
 from vad_processor import vad_processor
+from knowledge_base_routes import router as kb_router
+from rag_service import rag_service
 
 # Teler imports
 try:
@@ -46,6 +48,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Include knowledge base router
+app.include_router(kb_router)
+
 # Configuration
 TELER_API_KEY = os.getenv('TELER_API_KEY', 'cf771fc46a1fddb7939efa742801de98e48b0826be4d8b9976d3c7374a02368b')
 BACKEND_DOMAIN = os.getenv('BACKEND_DOMAIN', 'localhost:8000')
@@ -67,6 +72,7 @@ class CallInitiateRequest(BaseModel):
     flow_url: str
     status_callback_url: Optional[str] = None
     record: bool = True
+    knowledge_base_id: Optional[str] = None
 
 # Mock Teler client for development
 class MockTelerClient:
@@ -240,6 +246,7 @@ async def initiate_call(request: CallInitiateRequest):
             'flow_url': request.flow_url,
             'status_callback_url': status_callback_url,
             'record': request.record,
+            'knowledge_base_id': request.knowledge_base_id,
             'timestamp': datetime.now().isoformat(),
             'response_data': call_response,
             'call_type': 'conversation',
@@ -260,6 +267,7 @@ async def initiate_call(request: CallInitiateRequest):
                 'to_number': request.to_number,
                 'flow_url': request.flow_url,
                 'record': request.record,
+                'knowledge_base_id': request.knowledge_base_id,
                 'timestamp': call_record['timestamp'],
                 'call_type': 'conversation',
                 'message': 'Call configured for WebSocket streaming conversation'
@@ -326,14 +334,15 @@ async def ai_conversation(data: dict = Body(...)):
     """Generate AI conversation responses using Claude."""
     if not claude_service.is_available():
         raise HTTPException(status_code=503, detail="Claude AI service not available")
-    
+
     conversation_context = {
         'history': data.get('history', []),
         'current_input': data.get('current_input', ''),
         'call_id': data.get('call_id', ''),
-        'context': data.get('context', {})
+        'context': data.get('context', {}),
+        'knowledge_base_id': data.get('knowledge_base_id')
     }
-    
+
     try:
         response_text = await claude_service.generate_conversation_response(conversation_context)
         
@@ -429,6 +438,51 @@ async def get_websocket_streams():
         'count': len(streams)
     }
 
+@app.post("/api/calls/associate-kb")
+async def associate_knowledge_base(data: dict = Body(...)):
+    """
+    Associate a knowledge base with a call.
+    Used by WebSocket audio client to link KB with direct WebSocket connections.
+    """
+    try:
+        call_id = data.get('call_id')
+        knowledge_base_id = data.get('knowledge_base_id')
+
+        if not call_id:
+            raise HTTPException(status_code=400, detail="call_id is required")
+
+        # Store in call history for WebSocket connections
+        call_record = {
+            'id': len(call_history) + 1,
+            'call_id': call_id,
+            'status': 'active',
+            'from_number': 'WebSocket Client',
+            'to_number': 'AI Assistant',
+            'flow_url': 'WebSocket Direct',
+            'knowledge_base_id': knowledge_base_id,
+            'timestamp': datetime.now().isoformat(),
+            'call_type': 'websocket',
+            'notes': 'WebSocket audio client connection'
+        }
+
+        call_history.insert(0, call_record)
+        logger.info(f"Associated knowledge base {knowledge_base_id} with call {call_id}")
+
+        return {
+            'success': True,
+            'message': 'Knowledge base associated with call',
+            'data': {
+                'call_id': call_id,
+                'knowledge_base_id': knowledge_base_id
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error associating knowledge base: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to associate knowledge base: {str(e)}"
+        )
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv('PORT', 8000))
@@ -438,8 +492,10 @@ if __name__ == "__main__":
     logger.info(f"Environment variables loaded:")
     logger.info(f"  - ANTHROPIC_API_KEY: {'***' + os.getenv('ANTHROPIC_API_KEY', 'NOT_SET')[-4:] if os.getenv('ANTHROPIC_API_KEY') else 'NOT_SET'}")
     logger.info(f"  - SARVAM_API_KEY: {'***' + os.getenv('SARVAM_API_KEY', 'NOT_SET')[-4:] if os.getenv('SARVAM_API_KEY') else 'NOT_SET'}")
+    logger.info(f"  - VOYAGE_API_KEY: {'***' + os.getenv('VOYAGE_API_KEY', 'NOT_SET')[-4:] if os.getenv('VOYAGE_API_KEY') else 'NOT_SET'}")
     logger.info(f"Claude AI available: {claude_service.is_available()}")
     logger.info(f"Sarvam AI available: {sarvam_service.is_available()}")
+    logger.info(f"RAG Service available: {rag_service.is_available()}")
     logger.info(f"WebRTC VAD available: {vad_processor is not None}")
     
     uvicorn.run(

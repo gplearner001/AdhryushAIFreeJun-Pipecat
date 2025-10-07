@@ -3,6 +3,7 @@ export interface CallRequest {
   to_number: string;
   flow_url: string;
   status_callback_url?: string;
+  knowledge_base_id?: string;
 }
 
 export interface CallResponse {
