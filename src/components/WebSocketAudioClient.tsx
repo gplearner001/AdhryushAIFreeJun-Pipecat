@@ -62,7 +62,7 @@ export const WebSocketAudioClient: React.FC<WebSocketAudioClientProps> = ({
   const playingAudioRef = useRef<HTMLAudioElement | null>(null);
   const recordingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  const WS_URL = `${import.meta.env.VITE_API_URL?.replace('http', 'wss') || 'wss://localhost:5000'}/media-stream`;
+  const WS_URL = `${import.meta.env.VITE_API_URL?.replace('https', 'wss') || 'wss://localhost:5000'}/media-stream`;
 
   useEffect(() => {
     return () => {
