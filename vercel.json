@@ -6,6 +6,6 @@
     }
   ],
   "env": {
-    "VITE_API_URL": "@teler_backend_url"
+    "VITE_API_URL": "https://adhryushaifreejun-pipecat.onrender.com"
   }
 }
