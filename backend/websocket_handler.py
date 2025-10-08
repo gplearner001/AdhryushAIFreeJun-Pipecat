@@ -124,15 +124,21 @@ class TelerWebSocketHandler:
     async def _handle_start_message(self, data: Dict[str, Any], connection_id: str):
         """Handle start message with stream metadata"""
         logger.info(f"Stream started for connection {connection_id}")
+        logger.info(f"🔍 FULL START MESSAGE DATA: {json.dumps(data, indent=2)}")
 
         call_id = data.get("call_id")
+        stream_id = data.get("stream_id")
+        account_id = data.get("account_id")
+        call_app_id = data.get("call_app_id")
+
+        logger.info(f"🔍 Extracted IDs - call_id: {call_id}, stream_id: {stream_id}, account_id: {account_id}, call_app_id: {call_app_id}")
 
         # Store stream metadata
         self.stream_metadata[connection_id] = {
-            "account_id": data.get("account_id"),
-            "call_app_id": data.get("call_app_id"),
+            "account_id": account_id,
+            "call_app_id": call_app_id,
             "call_id": call_id,
-            "stream_id": data.get("stream_id"),
+            "stream_id": stream_id,
             "encoding": data.get("data", {}).get("encoding", "audio/l16"),
             "sample_rate": data.get("data", {}).get("sample_rate", 8000),
             "channels": data.get("data", {}).get("channels", 1),
@@ -141,15 +147,18 @@ class TelerWebSocketHandler:
 
         logger.info(f"Stream metadata: {self.stream_metadata[connection_id]}")
 
-        # Look up knowledge base ID from call history
-        knowledge_base_id = self._get_knowledge_base_for_call(call_id)
+        # Look up knowledge base ID from call history using multiple identifiers
+        knowledge_base_id = self._get_knowledge_base_for_call(call_id, stream_id, account_id)
         if knowledge_base_id:
-            logger.info(f"Knowledge base {knowledge_base_id} associated with call {call_id}")
+            logger.info(f"✅ Knowledge base {knowledge_base_id} associated with call {call_id}")
+        else:
+            logger.warning(f"⚠️ No knowledge base found for call {call_id}")
 
         # Update call state
         if connection_id in self.call_states:
             self.call_states[connection_id]['status'] = 'active'
             self.call_states[connection_id]['knowledge_base_id'] = knowledge_base_id
+            logger.info(f"📋 Call state updated - KB ID: {knowledge_base_id}")
         
         # Send initial greeting after a short delay
         await asyncio.sleep(1)  # Give time for connection to stabilize
@@ -866,28 +875,63 @@ class TelerWebSocketHandler:
         """Get all active stream metadata"""
         return self.stream_metadata.copy()
 
-    def _get_knowledge_base_for_call(self, call_id: str) -> Optional[str]:
-        """Look up knowledge base ID associated with a call"""
+    def _get_knowledge_base_for_call(self, call_id: str, stream_id: str = None, account_id: str = None) -> Optional[str]:
+        """Look up knowledge base ID associated with a call using multiple possible identifiers"""
         try:
             from fastapi_app import call_history
-            logger.info(f"Looking up knowledge base for call_id: {call_id}")
-            logger.info(f"Call history has {len(call_history)} entries")
+            logger.info(f"🔍 Looking up knowledge base for call_id: '{call_id}', stream_id: '{stream_id}', account_id: '{account_id}'")
+            logger.info(f"📚 Call history has {len(call_history)} entries")
 
-            for call in call_history:
-                logger.debug(f"Checking call: {call.get('call_id')} (KB: {call.get('knowledge_base_id')})")
-                if call.get('call_id') == call_id:
-                    kb_id = call.get('knowledge_base_id')
+            if not call_id and not stream_id:
+                logger.warning(f"⚠️ No identifiers provided for lookup")
+                return None
+
+            # Try to find the most recent call with a knowledge base (for Teler calls)
+            # Since Teler uses different IDs, we'll use a time-based approach
+            # Look for calls initiated in the last 5 minutes with a knowledge base
+            from datetime import datetime, timedelta
+            recent_threshold = datetime.now() - timedelta(minutes=5)
+
+            for idx, call in enumerate(call_history):
+                stored_call_id = call.get('call_id')
+                kb_id = call.get('knowledge_base_id')
+                call_timestamp = call.get('timestamp')
+                call_type = call.get('call_type')
+
+                logger.info(f"  [{idx}] call_id: '{stored_call_id}' | KB: '{kb_id}' | Type: '{call_type}' | Time: {call_timestamp}")
+
+                # Direct match on call_id
+                if stored_call_id == call_id:
                     if kb_id:
-                        logger.info(f"✓ Found knowledge base {kb_id} for call {call_id}")
+                        logger.info(f"✅ Found knowledge base '{kb_id}' for call '{call_id}' (direct match)")
                         return kb_id
                     else:
-                        logger.info(f"Call {call_id} found but no knowledge base associated")
+                        logger.info(f"ℹ️ Call '{call_id}' found but no knowledge base associated")
                         return None
 
-            logger.warning(f"No matching call found in history for call_id: {call_id}")
+            # If no direct match, find the most recent "conversation" type call with a KB
+            logger.info(f"🔍 No direct match found, looking for recent conversation calls with KB...")
+            for idx, call in enumerate(call_history):
+                call_type = call.get('call_type')
+                kb_id = call.get('knowledge_base_id')
+                call_timestamp_str = call.get('timestamp')
+
+                if call_type == 'conversation' and kb_id:
+                    try:
+                        call_time = datetime.fromisoformat(call_timestamp_str)
+                        if call_time >= recent_threshold:
+                            logger.info(f"✅ Using knowledge base '{kb_id}' from recent call (within 5 min): {call.get('call_id')}")
+                            return kb_id
+                    except:
+                        pass
+
+            logger.warning(f"❌ No matching call found in history for call_id: '{call_id}'")
+            logger.warning(f"Available call IDs: {[call.get('call_id') for call in call_history]}")
             return None
         except Exception as e:
-            logger.error(f"Error looking up knowledge base for call: {e}")
+            logger.error(f"❌ Error looking up knowledge base for call: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return None
 
 # Global instance
