@@ -255,8 +255,10 @@ async def initiate_call(request: CallInitiateRequest):
         
         # Store in history
         call_history.insert(0, call_record)
-        
-        logger.info(f"Call initiated successfully: {call_response['call_id']}")
+
+        logger.info(f"✅ Call initiated successfully: {call_response['call_id']}")
+        if request.knowledge_base_id:
+            logger.info(f"📚 Knowledge base '{request.knowledge_base_id}' associated with call '{call_response['call_id']}'")
         
         return {
             'success': True,
@@ -451,22 +453,35 @@ async def associate_knowledge_base(data: dict = Body(...)):
         if not call_id:
             raise HTTPException(status_code=400, detail="call_id is required")
 
-        # Store in call history for WebSocket connections
-        call_record = {
-            'id': len(call_history) + 1,
-            'call_id': call_id,
-            'status': 'active',
-            'from_number': 'WebSocket Client',
-            'to_number': 'AI Assistant',
-            'flow_url': 'WebSocket Direct',
-            'knowledge_base_id': knowledge_base_id,
-            'timestamp': datetime.now().isoformat(),
-            'call_type': 'websocket',
-            'notes': 'WebSocket audio client connection'
-        }
+        # Check if call already exists in history (from initiate_call)
+        existing_call = None
+        for call in call_history:
+            if call.get('call_id') == call_id:
+                existing_call = call
+                break
 
-        call_history.insert(0, call_record)
-        logger.info(f"Associated knowledge base {knowledge_base_id} with call {call_id}")
+        if existing_call:
+            # Update existing call record with knowledge base
+            existing_call['knowledge_base_id'] = knowledge_base_id
+            existing_call['updated_at'] = datetime.now().isoformat()
+            logger.info(f"📚 Updated existing call '{call_id}' with knowledge base '{knowledge_base_id}'")
+        else:
+            # Store new call record for WebSocket connections
+            call_record = {
+                'id': len(call_history) + 1,
+                'call_id': call_id,
+                'status': 'active',
+                'from_number': 'WebSocket Client',
+                'to_number': 'AI Assistant',
+                'flow_url': 'WebSocket Direct',
+                'knowledge_base_id': knowledge_base_id,
+                'timestamp': datetime.now().isoformat(),
+                'call_type': 'websocket',
+                'notes': 'WebSocket audio client connection'
+            }
+
+            call_history.insert(0, call_record)
+            logger.info(f"📚 Associated knowledge base '{knowledge_base_id}' with new call '{call_id}'")
 
         return {
             'success': True,
@@ -482,6 +497,17 @@ async def associate_knowledge_base(data: dict = Body(...)):
             status_code=500,
             detail=f"Failed to associate knowledge base: {str(e)}"
         )
+
+@app.get("/api/calls/debug")
+async def debug_call_history():
+    """Debug endpoint to view call history and knowledge base associations."""
+    return {
+        'success': True,
+        'data': {
+            'call_history': call_history,
+            'count': len(call_history)
+        }
+    }
 
 if __name__ == "__main__":
     import uvicorn
